@@ -9,6 +9,7 @@ No external dependencies required.
 from __future__ import print_function
 
 from .client import Trace32Client, Trace32Error
+from .core_manager import CoreManager
 from .constants import *
 
 __version__ = '1.0.0'

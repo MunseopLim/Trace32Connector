@@ -131,3 +131,9 @@ DEFAULT_PORT = 20000
 DEFAULT_TIMEOUT = 10.0
 DEFAULT_PACKLEN_TCP = 16384
 DEFAULT_PACKLEN_UDP = 1024
+
+# ============================================================
+# Multi-Core Defaults
+# ============================================================
+MAX_CORES = 16
+DEFAULT_BASE_PORT = 20000

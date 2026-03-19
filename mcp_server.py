@@ -5,6 +5,8 @@
 Implements MCP (stdio transport) so AI assistants like Claude can
 interact with TRACE32 PowerView for embedded debugging.
 
+Supports multi-core debugging (up to 16 cores on consecutive ports).
+
 Compatible with Python 2.7 and 3.4+. No external dependencies.
 
 Usage:
@@ -20,21 +22,47 @@ import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from t32.client import Trace32Client, Trace32Error
+from t32.client import Trace32Error
+from t32.core_manager import CoreManager
 
-# Global client instance
-_client = Trace32Client()
+# Global core manager (replaces single _client)
+_core_manager = CoreManager()
+
+# Shared schema property for core_id
+_CORE_ID_PROP = {
+    "core_id": {
+        "type": "integer",
+        "description": "Core ID for multi-core debugging (0-15, default: 0)",
+        "default": 0
+    }
+}
 
 # ======================================================================
 # Tool Definitions
 # ======================================================================
+
+
+def _inject_core_id(schema):
+    """Add core_id property to an inputSchema dict."""
+    if schema is None:
+        return {
+            "type": "object",
+            "properties": dict(_CORE_ID_PROP)
+        }
+    props = dict(schema.get("properties", {}))
+    props.update(_CORE_ID_PROP)
+    result = dict(schema)
+    result["properties"] = props
+    return result
+
 
 TOOLS = [
     {
         "name": "t32_connect",
         "description": (
             "Connect to a running TRACE32 PowerView instance. "
-            "PowerView must have RCL=NETTCP enabled in config.t32."
+            "PowerView must have RCL=NETTCP enabled in config.t32. "
+            "Use core_id for multi-core setups (0-15)."
         ),
         "inputSchema": {
             "type": "object",
@@ -48,13 +76,55 @@ TOOLS = [
                     "type": "integer",
                     "description": "RCL port number (default: 20000)",
                     "default": 20000
+                },
+                "core_id": {
+                    "type": "integer",
+                    "description": "Core ID for multi-core (0-15, default: 0)",
+                    "default": 0
                 }
             }
         }
     },
     {
+        "name": "t32_connect_all",
+        "description": (
+            "Connect to multiple TRACE32 cores at once. "
+            "Connects to num_cores consecutive ports starting from base_port."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "host": {
+                    "type": "string",
+                    "description": "Hostname or IP (default: localhost)",
+                    "default": "localhost"
+                },
+                "base_port": {
+                    "type": "integer",
+                    "description": "First port number (default: 20000)",
+                    "default": 20000
+                },
+                "num_cores": {
+                    "type": "integer",
+                    "description": "Number of cores to connect (1-16)",
+                    "default": 16
+                }
+            },
+            "required": ["num_cores"]
+        }
+    },
+    {
         "name": "t32_disconnect",
-        "description": "Disconnect from TRACE32 PowerView."
+        "description": "Disconnect a single core from TRACE32 PowerView.",
+        "inputSchema": _inject_core_id(None)
+    },
+    {
+        "name": "t32_disconnect_all",
+        "description": "Disconnect all connected TRACE32 cores."
+    },
+    {
+        "name": "t32_list_cores",
+        "description": "List all connected cores with their host, port, and status."
     },
     {
         "name": "t32_cmd",
@@ -64,7 +134,7 @@ TOOLS = [
             "Examples: 'SYStem.Up', 'Break.Set main', 'Data.dump 0x0--0xFF', "
             "'Var.Watch myVar', 'Register.view'"
         ),
-        "inputSchema": {
+        "inputSchema": _inject_core_id({
             "type": "object",
             "properties": {
                 "command": {
@@ -73,7 +143,7 @@ TOOLS = [
                 }
             },
             "required": ["command"]
-        }
+        })
     },
     {
         "name": "t32_eval",
@@ -82,7 +152,7 @@ TOOLS = [
             "Examples: 'Register(PC)', 'Var.VALUE(myVar)', "
             "'sYmbol.BEGIN(main)', 'VERSION.SOFTWARE()'"
         ),
-        "inputSchema": {
+        "inputSchema": _inject_core_id({
             "type": "object",
             "properties": {
                 "expression": {
@@ -91,14 +161,15 @@ TOOLS = [
                 }
             },
             "required": ["expression"]
-        }
+        })
     },
     {
         "name": "t32_get_state",
         "description": (
             "Get the current target CPU state. "
             "Returns: down, halted, stopped (at breakpoint), or running."
-        )
+        ),
+        "inputSchema": _inject_core_id(None)
     },
     {
         "name": "t32_read_memory",
@@ -106,7 +177,7 @@ TOOLS = [
             "Read target memory. Returns hex-encoded bytes. "
             "Address can include access class prefix like 'D:0x1000' or 'P:0x2000'."
         ),
-        "inputSchema": {
+        "inputSchema": _inject_core_id({
             "type": "object",
             "properties": {
                 "address": {
@@ -124,12 +195,12 @@ TOOLS = [
                 }
             },
             "required": ["address", "size"]
-        }
+        })
     },
     {
         "name": "t32_write_memory",
         "description": "Write data to target memory.",
-        "inputSchema": {
+        "inputSchema": _inject_core_id({
             "type": "object",
             "properties": {
                 "address": {
@@ -147,7 +218,7 @@ TOOLS = [
                 }
             },
             "required": ["address", "data"]
-        }
+        })
     },
     {
         "name": "t32_read_register",
@@ -155,7 +226,7 @@ TOOLS = [
             "Read a CPU register by name. "
             "Examples: PC, SP, R0-R15, LR, CPSR, etc."
         ),
-        "inputSchema": {
+        "inputSchema": _inject_core_id({
             "type": "object",
             "properties": {
                 "name": {
@@ -164,12 +235,12 @@ TOOLS = [
                 }
             },
             "required": ["name"]
-        }
+        })
     },
     {
         "name": "t32_write_register",
         "description": "Write a value to a CPU register.",
-        "inputSchema": {
+        "inputSchema": _inject_core_id({
             "type": "object",
             "properties": {
                 "name": {
@@ -182,20 +253,22 @@ TOOLS = [
                 }
             },
             "required": ["name", "value"]
-        }
+        })
     },
     {
         "name": "t32_go",
-        "description": "Start (resume) target CPU execution."
+        "description": "Start (resume) target CPU execution.",
+        "inputSchema": _inject_core_id(None)
     },
     {
         "name": "t32_break",
-        "description": "Halt (break) target CPU execution."
+        "description": "Halt (break) target CPU execution.",
+        "inputSchema": _inject_core_id(None)
     },
     {
         "name": "t32_step",
         "description": "Single-step the target CPU.",
-        "inputSchema": {
+        "inputSchema": _inject_core_id({
             "type": "object",
             "properties": {
                 "count": {
@@ -209,12 +282,12 @@ TOOLS = [
                     "default": False
                 }
             }
-        }
+        })
     },
     {
         "name": "t32_breakpoint_set",
         "description": "Set a breakpoint at an address.",
-        "inputSchema": {
+        "inputSchema": _inject_core_id({
             "type": "object",
             "properties": {
                 "address": {
@@ -228,12 +301,12 @@ TOOLS = [
                 }
             },
             "required": ["address"]
-        }
+        })
     },
     {
         "name": "t32_breakpoint_delete",
         "description": "Delete breakpoint(s). Omit address to delete all.",
-        "inputSchema": {
+        "inputSchema": _inject_core_id({
             "type": "object",
             "properties": {
                 "address": {
@@ -241,16 +314,17 @@ TOOLS = [
                     "description": "Address to remove breakpoint from, or omit for all"
                 }
             }
-        }
+        })
     },
     {
         "name": "t32_breakpoint_list",
-        "description": "List all currently set breakpoints."
+        "description": "List all currently set breakpoints.",
+        "inputSchema": _inject_core_id(None)
     },
     {
         "name": "t32_read_variable",
         "description": "Read a C/C++ variable value from the target.",
-        "inputSchema": {
+        "inputSchema": _inject_core_id({
             "type": "object",
             "properties": {
                 "name": {
@@ -259,12 +333,12 @@ TOOLS = [
                 }
             },
             "required": ["name"]
-        }
+        })
     },
     {
         "name": "t32_write_variable",
         "description": "Write a value to a C/C++ variable on the target.",
-        "inputSchema": {
+        "inputSchema": _inject_core_id({
             "type": "object",
             "properties": {
                 "name": {
@@ -277,12 +351,12 @@ TOOLS = [
                 }
             },
             "required": ["name", "value"]
-        }
+        })
     },
     {
         "name": "t32_get_symbol",
         "description": "Get the memory address of a symbol (function or global variable).",
-        "inputSchema": {
+        "inputSchema": _inject_core_id({
             "type": "object",
             "properties": {
                 "name": {
@@ -291,12 +365,12 @@ TOOLS = [
                 }
             },
             "required": ["name"]
-        }
+        })
     },
     {
         "name": "t32_run_script",
         "description": "Execute a PRACTICE (.cmm) script file on the TRACE32 host.",
-        "inputSchema": {
+        "inputSchema": _inject_core_id({
             "type": "object",
             "properties": {
                 "path": {
@@ -305,12 +379,12 @@ TOOLS = [
                 }
             },
             "required": ["path"]
-        }
+        })
     },
     {
         "name": "t32_load",
         "description": "Load a binary/ELF file to the target.",
-        "inputSchema": {
+        "inputSchema": _inject_core_id({
             "type": "object",
             "properties": {
                 "path": {
@@ -328,11 +402,12 @@ TOOLS = [
                 }
             },
             "required": ["path"]
-        }
+        })
     },
     {
         "name": "t32_get_version",
-        "description": "Get TRACE32 PowerView software version."
+        "description": "Get TRACE32 PowerView software version.",
+        "inputSchema": _inject_core_id(None)
     },
 ]
 
@@ -341,160 +416,217 @@ TOOLS = [
 # Tool Handlers
 # ======================================================================
 
+def _get_client(args):
+    """Extract core_id from args and return the appropriate client."""
+    core_id = int(args.get("core_id", 0))
+    return _core_manager.get_client(core_id)
+
+
 def _handle_connect(args):
     host = args.get("host", "localhost")
     port = args.get("port", 20000)
-    _client.connect(host=str(host), port=int(port))
+    core_id = int(args.get("core_id", 0))
+    client = _core_manager.connect_core(core_id, host, port)
     version = ""
     try:
-        version = _client.get_version()
+        version = client.get_version()
     except Exception:
         pass
-    result = {"status": "connected", "host": host, "port": port}
+    result = {"status": "connected", "core_id": core_id, "host": host, "port": port}
     if version:
         result["version"] = version
     return result
 
 
+def _handle_connect_all(args):
+    host = args.get("host", "localhost")
+    base_port = int(args.get("base_port", 20000))
+    num_cores = int(args.get("num_cores", 16))
+    results = _core_manager.connect_all(host, base_port, num_cores)
+    connected = sum(1 for r in results if r["status"] == "connected")
+    return {
+        "total": num_cores,
+        "connected": connected,
+        "failed": num_cores - connected,
+        "cores": results,
+    }
+
+
 def _handle_disconnect(args):
-    _client.disconnect()
-    return {"status": "disconnected"}
+    core_id = int(args.get("core_id", 0))
+    _core_manager.disconnect_core(core_id)
+    return {"status": "disconnected", "core_id": core_id}
+
+
+def _handle_disconnect_all(args):
+    count = _core_manager.connected_count
+    _core_manager.disconnect_all()
+    return {"status": "disconnected_all", "cores_disconnected": count}
+
+
+def _handle_list_cores(args):
+    cores = _core_manager.list_cores()
+    return {
+        "connected_count": _core_manager.connected_count,
+        "cores": cores,
+    }
 
 
 def _handle_cmd(args):
+    client = _get_client(args)
     command = args["command"]
-    _client.cmd(command)
+    client.cmd(command)
     return {"status": "ok", "command": command}
 
 
 def _handle_eval(args):
+    client = _get_client(args)
     expression = args["expression"]
-    result = _client.eval_expression(expression)
+    result = client.eval_expression(expression)
     return {"expression": expression, "result": result}
 
 
 def _handle_get_state(args):
-    return _client.get_state()
+    client = _get_client(args)
+    return client.get_state()
 
 
 def _handle_read_memory(args):
+    client = _get_client(args)
     address = args["address"]
     size = int(args["size"])
     access = args.get("access", "D")
-    hex_data = _client.read_memory_hex(address, size, access)
+    hex_data = client.read_memory_hex(address, size, access)
     return {"address": str(address), "size": size, "hex": hex_data}
 
 
 def _handle_write_memory(args):
+    client = _get_client(args)
     address = args["address"]
     data = args["data"]
     access = args.get("access", "D")
-    _client.write_memory(address, data, access)
+    client.write_memory(address, data, access)
     return {"status": "ok", "address": str(address), "bytes_written": len(data) // 2}
 
 
 def _handle_read_register(args):
+    client = _get_client(args)
     name = args["name"]
-    value = _client.read_register(name)
+    value = client.read_register(name)
     return {"register": name, "value": value, "hex": "0x{0:X}".format(value)}
 
 
 def _handle_write_register(args):
+    client = _get_client(args)
     name = args["name"]
     value = int(args["value"])
-    _client.write_register(name, value)
+    client.write_register(name, value)
     return {"status": "ok", "register": name, "value": value}
 
 
 def _handle_go(args):
-    _client.go()
+    client = _get_client(args)
+    client.go()
     return {"status": "ok", "action": "target execution started"}
 
 
 def _handle_break(args):
-    _client.break_target()
+    client = _get_client(args)
+    client.break_target()
     return {"status": "ok", "action": "target halted"}
 
 
 def _handle_step(args):
+    client = _get_client(args)
     count = int(args.get("count", 1))
     over = args.get("over", False)
     if over:
-        _client.step_over()
+        client.step_over()
     else:
-        _client.step(count)
+        client.step(count)
     return {"status": "ok", "steps": count, "over": over}
 
 
 def _handle_breakpoint_set(args):
+    client = _get_client(args)
     address = args["address"]
     bp_type = args.get("type", "program")
-    # If address is a symbol name (string without 0x prefix), use Break.Set directly
     if isinstance(address, str) and not address.startswith('0x') and not address.startswith('0X'):
-        _client.cmd("Break.Set {0} /{1}".format(address, bp_type.capitalize()))
+        client.cmd("Break.Set {0} /{1}".format(address, bp_type.capitalize()))
     else:
-        _client.set_breakpoint(address, bp_type)
+        client.set_breakpoint(address, bp_type)
     return {"status": "ok", "address": str(address), "type": bp_type}
 
 
 def _handle_breakpoint_delete(args):
+    client = _get_client(args)
     address = args.get("address")
-    _client.delete_breakpoint(address)
+    client.delete_breakpoint(address)
     return {"status": "ok", "address": str(address) if address else "all"}
 
 
 def _handle_breakpoint_list(args):
-    result = _client.list_breakpoints()
+    client = _get_client(args)
+    result = client.list_breakpoints()
     return {"breakpoints": result}
 
 
 def _handle_read_variable(args):
+    client = _get_client(args)
     name = args["name"]
-    value = _client.read_variable(name)
+    value = client.read_variable(name)
     return {"variable": name, "value": value}
 
 
 def _handle_write_variable(args):
+    client = _get_client(args)
     name = args["name"]
     value = args["value"]
-    _client.write_variable(name, value)
+    client.write_variable(name, value)
     return {"status": "ok", "variable": name, "value": value}
 
 
 def _handle_get_symbol(args):
+    client = _get_client(args)
     name = args["name"]
-    address = _client.get_symbol_address(name)
+    address = client.get_symbol_address(name)
     return {"symbol": name, "address": address}
 
 
 def _handle_run_script(args):
+    client = _get_client(args)
     path = args["path"]
-    _client.run_script(path)
+    client.run_script(path)
     return {"status": "ok", "script": path}
 
 
 def _handle_load(args):
+    client = _get_client(args)
     path = args["path"]
     fmt = args.get("format", "elf")
     if fmt == "elf":
-        _client.load_elf(path)
+        client.load_elf(path)
     elif fmt == "binary":
         address = args.get("address", 0)
-        _client.load_binary(path, address)
+        client.load_binary(path, address)
     else:
-        _client.cmd("Data.LOAD.{0} {1}".format(fmt.capitalize(), path))
+        client.cmd("Data.LOAD.{0} {1}".format(fmt.capitalize(), path))
     return {"status": "ok", "path": path, "format": fmt}
 
 
 def _handle_get_version(args):
-    version = _client.get_version()
+    client = _get_client(args)
+    version = client.get_version()
     return {"version": version}
 
 
 # Tool name -> handler mapping
 _HANDLERS = {
     "t32_connect": _handle_connect,
+    "t32_connect_all": _handle_connect_all,
     "t32_disconnect": _handle_disconnect,
+    "t32_disconnect_all": _handle_disconnect_all,
+    "t32_list_cores": _handle_list_cores,
     "t32_cmd": _handle_cmd,
     "t32_eval": _handle_eval,
     "t32_get_state": _handle_get_state,
@@ -549,7 +681,7 @@ def _handle_request(request):
             },
             "serverInfo": {
                 "name": "trace32-mcp-server",
-                "version": "1.0.0"
+                "version": "1.1.0"
             }
         }
         return _make_response(req_id, result)
@@ -607,15 +739,14 @@ def _write_message(msg):
 
 def main():
     """Main MCP server loop. Reads from stdin, writes to stdout."""
-    # Log to stderr so it doesn't interfere with MCP protocol
-    sys.stderr.write("TRACE32 MCP Server started. Waiting for requests...\n")
+    sys.stderr.write("TRACE32 MCP Server v1.1.0 started (multi-core support). "
+                     "Waiting for requests...\n")
     sys.stderr.flush()
 
     while True:
         try:
             line = sys.stdin.readline()
             if not line:
-                # EOF - client disconnected
                 break
             line = line.strip()
             if not line:
@@ -640,7 +771,7 @@ def main():
 
     # Cleanup
     try:
-        _client.disconnect()
+        _core_manager.disconnect_all()
     except Exception:
         pass
     sys.stderr.write("TRACE32 MCP Server stopped.\n")

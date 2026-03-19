@@ -195,7 +195,7 @@ class TestMcpE2E(unittest.TestCase):
         """Calling a tool before connecting should return an error."""
         r = self._mcp.call_tool('t32_get_state')
         self.assertTrue(r['is_error'])
-        self.assertIn('Not connected', r['text'])
+        self.assertIn('not connected', r['text'].lower())
 
     def test_06_connect(self):
         """Connect to MockTrace32Server via MCP."""
@@ -335,7 +335,7 @@ class TestMcpE2E(unittest.TestCase):
         """After disconnect, tool calls should fail."""
         r = self._mcp.call_tool('t32_get_state')
         self.assertTrue(r['is_error'])
-        self.assertIn('Not connected', r['text'])
+        self.assertIn('not connected', r['text'].lower())
 
     def test_26_reconnect(self):
         """Reconnect should work after disconnect."""

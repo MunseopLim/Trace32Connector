@@ -17,7 +17,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from tests.test_client import MockTrace32Server
-from mcp_server import _handle_request, _client
+from mcp_server import _handle_request, _core_manager
 
 
 def _call_tool(tool_name, arguments):
