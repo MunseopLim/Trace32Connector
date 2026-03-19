@@ -138,6 +138,8 @@ class MockTrace32Server(object):
         """Receive one framed message."""
         try:
             header = self._recv_exact(4)
+        except socket.timeout:
+            raise  # let caller's except socket.timeout handle it
         except Exception:
             return None
         if header is None:
