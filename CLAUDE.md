@@ -20,9 +20,9 @@ TRACE32 PowerView를 AI가 제어할 수 있게 하는 MCP 서버 / HTTP API / P
 ```
 t32/constants.py      — RCL 프로토콜 상수 (CMD, SUBCMD, STATE, ACCESS, MAX_CORES 등)
 t32/client.py         — TCP 소켓 기반 TRACE32 클라이언트 (핵심)
-t32/core_manager.py   — 멀티코어 클라이언트 매니저 (최대 16코어)
-mcp_server.py         — MCP stdio 서버 (JSON-RPC 2.0, 24개 tools, 멀티코어 지원)
-http_server.py        — HTTP REST API 서버 (port 8032, 멀티코어 지원)
+t32/core_manager.py   — 멀티코어 매니저 + 엔디안 설정 + interpret_words()
+mcp_server.py         — MCP stdio 서버 (JSON-RPC 2.0, 26개 tools, 멀티코어/엔디안)
+http_server.py        — HTTP REST API 서버 (port 8032, 멀티코어/엔디안)
 config.json           — 기본 설정 (host, port, timeout)
 tests/                — 유닛 테스트 (unittest + mock TCP 서버)
 ```
@@ -34,6 +34,8 @@ tests/                — 유닛 테스트 (unittest + mock TCP 서버)
 - `core_id` 파라미터 (0-15, 기본값 0) — 모든 tool/API에서 사용
 - `t32_connect_all` — 연속 포트 범위로 일괄 접속
 - `t32_list_cores` — 접속된 코어 목록 조회
+- `t32_set_endian` / `t32_get_endian` — 코어별 엔디안 설정 (little/big)
+- `t32_read_memory`의 `word_size` 옵션 — 엔디안 기반 워드 해석 (16/32비트)
 - 하위호환: `core_id` 생략 시 core 0 사용 (기존 단일코어 동작 동일)
 
 ```bash

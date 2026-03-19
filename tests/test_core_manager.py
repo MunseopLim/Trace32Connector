@@ -294,5 +294,109 @@ class TestCoreManagerSixteenCores(unittest.TestCase):
             self.mgr.connect_core(16, '127.0.0.1', self.mocks[0].port)
 
 
+class TestCoreManagerEndianness(unittest.TestCase):
+    """Test per-core endianness management."""
+
+    def setUp(self):
+        self.mgr = CoreManager()
+
+    def test_default_endian_is_little(self):
+        self.assertEqual(self.mgr.get_endianness(0), 'little')
+
+    def test_set_big_endian(self):
+        self.mgr.set_endianness(0, 'big')
+        self.assertEqual(self.mgr.get_endianness(0), 'big')
+
+    def test_set_little_endian(self):
+        self.mgr.set_endianness(0, 'little')
+        self.assertEqual(self.mgr.get_endianness(0), 'little')
+
+    def test_invalid_endian_raises(self):
+        with self.assertRaises(Trace32Error):
+            self.mgr.set_endianness(0, 'middle')
+
+    def test_case_insensitive(self):
+        self.mgr.set_endianness(0, 'BIG')
+        self.assertEqual(self.mgr.get_endianness(0), 'big')
+
+    def test_per_core_endianness(self):
+        self.mgr.set_endianness(0, 'little')
+        self.mgr.set_endianness(1, 'big')
+        self.assertEqual(self.mgr.get_endianness(0), 'little')
+        self.assertEqual(self.mgr.get_endianness(1), 'big')
+
+    def test_disconnect_clears_endianness(self):
+        self.mgr.set_endianness(0, 'big')
+        self.mgr.disconnect_core(0)
+        self.assertEqual(self.mgr.get_endianness(0), 'little')
+
+    def test_disconnect_all_clears_endianness(self):
+        self.mgr.set_endianness(0, 'big')
+        self.mgr.set_endianness(1, 'big')
+        self.mgr.disconnect_all()
+        self.assertEqual(self.mgr.get_endianness(0), 'little')
+        self.assertEqual(self.mgr.get_endianness(1), 'little')
+
+    def test_list_cores_includes_endian(self):
+        mock = MockTrace32Server()
+        t = threading.Thread(target=mock.start)
+        t.daemon = True
+        t.start()
+        time.sleep(0.3)
+        self.mgr.connect_core(0, '127.0.0.1', mock.port)
+        self.mgr.set_endianness(0, 'big')
+        cores = self.mgr.list_cores()
+        self.assertEqual(cores[0]['endian'], 'big')
+        self.mgr.disconnect_all()
+        mock.stop()
+
+
+class TestInterpretWords(unittest.TestCase):
+    """Test byte-swap word interpretation."""
+
+    def test_le_32bit(self):
+        from t32.core_manager import interpret_words
+        data = b'\x78\x56\x34\x12'
+        words = interpret_words(data, 4, 'little')
+        self.assertEqual(words, [0x12345678])
+
+    def test_be_32bit(self):
+        from t32.core_manager import interpret_words
+        data = b'\x12\x34\x56\x78'
+        words = interpret_words(data, 4, 'big')
+        self.assertEqual(words, [0x12345678])
+
+    def test_le_16bit(self):
+        from t32.core_manager import interpret_words
+        data = b'\x34\x12\x78\x56'
+        words = interpret_words(data, 2, 'little')
+        self.assertEqual(words, [0x1234, 0x5678])
+
+    def test_be_16bit(self):
+        from t32.core_manager import interpret_words
+        data = b'\x12\x34\x56\x78'
+        words = interpret_words(data, 2, 'big')
+        self.assertEqual(words, [0x1234, 0x5678])
+
+    def test_same_bytes_different_endian(self):
+        from t32.core_manager import interpret_words
+        data = b'\xDE\xAD\xBE\xEF'
+        le = interpret_words(data, 4, 'little')
+        be = interpret_words(data, 4, 'big')
+        self.assertEqual(le, [0xEFBEADDE])
+        self.assertEqual(be, [0xDEADBEEF])
+
+    def test_invalid_word_size(self):
+        from t32.core_manager import interpret_words
+        with self.assertRaises(Trace32Error):
+            interpret_words(b'\x00\x00\x00', 3, 'little')
+
+    def test_partial_word_ignored(self):
+        from t32.core_manager import interpret_words
+        data = b'\x01\x02\x03\x04\x05'  # 5 bytes, 1 full 32-bit word + 1 leftover
+        words = interpret_words(data, 4, 'little')
+        self.assertEqual(len(words), 1)
+
+
 if __name__ == '__main__':
     unittest.main()

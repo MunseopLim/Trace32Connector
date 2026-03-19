@@ -4,13 +4,43 @@
 
 Manages multiple Trace32Client instances, one per core.
 Supports up to MAX_CORES (16) simultaneous connections.
+Per-core endianness setting for correct memory interpretation.
 
 Compatible with Python 2.7 and 3.4+.
 """
 from __future__ import print_function
 
+import struct
+
 from .client import Trace32Client, Trace32Error
-from .constants import MAX_CORES, DEFAULT_TIMEOUT
+from .constants import (
+    MAX_CORES, DEFAULT_TIMEOUT,
+    ENDIAN_LITTLE, ENDIAN_BIG, ENDIAN_DEFAULT, VALID_ENDIANNESS,
+)
+
+
+def interpret_words(data, word_size, endian):
+    """Interpret raw bytes as a list of word values.
+
+    Args:
+        data: bytes/bytearray of memory content.
+        word_size: 2 or 4 (bytes per word).
+        endian: 'little' or 'big'.
+
+    Returns:
+        List of integer word values.
+    """
+    if word_size not in (2, 4):
+        raise Trace32Error("word_size must be 2 or 4, got {0}".format(word_size))
+    fmt_char = 'H' if word_size == 2 else 'I'
+    prefix = '<' if endian == ENDIAN_LITTLE else '>'
+    count = len(data) // word_size
+    result = []
+    for i in range(count):
+        offset = i * word_size
+        value = struct.unpack_from(prefix + fmt_char, bytes(data), offset)[0]
+        result.append(value)
+    return result
 
 
 class CoreManager(object):
@@ -21,7 +51,8 @@ class CoreManager(object):
     """
 
     def __init__(self, max_cores=MAX_CORES):
-        self._clients = {}  # core_id -> Trace32Client
+        self._clients = {}      # core_id -> Trace32Client
+        self._endianness = {}   # core_id -> 'little' | 'big'
         self._max_cores = max_cores
 
     def _validate_core_id(self, core_id):
@@ -51,6 +82,10 @@ class CoreManager(object):
             raise Trace32Error(
                 "Core {0} is not connected. Call connect first.".format(core_id))
         return client
+
+    # ------------------------------------------------------------------
+    # Connection management
+    # ------------------------------------------------------------------
 
     def connect_core(self, core_id, host, port, timeout=DEFAULT_TIMEOUT):
         """Connect a single core.
@@ -82,6 +117,7 @@ class CoreManager(object):
         client = self._clients.pop(core_id, None)
         if client:
             client.disconnect()
+        self._endianness.pop(core_id, None)
 
     def connect_all(self, host, base_port, num_cores, timeout=DEFAULT_TIMEOUT):
         """Connect to multiple cores on consecutive ports.
@@ -122,12 +158,47 @@ class CoreManager(object):
             except Exception:
                 pass
         self._clients.clear()
+        self._endianness.clear()
+
+    # ------------------------------------------------------------------
+    # Endianness
+    # ------------------------------------------------------------------
+
+    def set_endianness(self, core_id, endian):
+        """Set target endianness for a core.
+
+        Args:
+            core_id: Core identifier (0-15).
+            endian: 'little' or 'big'.
+        """
+        core_id = self._validate_core_id(core_id)
+        endian = str(endian).lower()
+        if endian not in VALID_ENDIANNESS:
+            raise Trace32Error(
+                "endian must be 'little' or 'big', got '{0}'".format(endian))
+        self._endianness[core_id] = endian
+
+    def get_endianness(self, core_id=0):
+        """Get target endianness for a core.
+
+        Args:
+            core_id: Core identifier (0-15).
+
+        Returns:
+            'little' or 'big'.
+        """
+        core_id = self._validate_core_id(core_id)
+        return self._endianness.get(core_id, ENDIAN_DEFAULT)
+
+    # ------------------------------------------------------------------
+    # Info
+    # ------------------------------------------------------------------
 
     def list_cores(self):
         """Return status of all connected cores.
 
         Returns:
-            List of dicts with core_id, connected, host, port.
+            List of dicts with core_id, connected, host, port, endian.
         """
         result = []
         for core_id in sorted(self._clients.keys()):
@@ -137,6 +208,7 @@ class CoreManager(object):
                 "connected": client.connected,
                 "host": client._host,
                 "port": client._port,
+                "endian": self._endianness.get(core_id, ENDIAN_DEFAULT),
             })
         return result
 

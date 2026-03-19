@@ -15,6 +15,7 @@ Usage:
 """
 from __future__ import print_function
 
+import binascii
 import json
 import sys
 import os
@@ -23,7 +24,7 @@ import traceback
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from t32.client import Trace32Error
-from t32.core_manager import CoreManager
+from t32.core_manager import CoreManager, interpret_words
 
 # Global core manager (replaces single _client)
 _core_manager = CoreManager()
@@ -124,7 +125,30 @@ TOOLS = [
     },
     {
         "name": "t32_list_cores",
-        "description": "List all connected cores with their host, port, and status."
+        "description": "List all connected cores with their host, port, endian, and status."
+    },
+    {
+        "name": "t32_set_endian",
+        "description": (
+            "Set target endianness for a core. Affects word-level memory interpretation. "
+            "Default is 'little'. Use 'big' for big-endian targets (PowerPC, some ARM BE8)."
+        ),
+        "inputSchema": _inject_core_id({
+            "type": "object",
+            "properties": {
+                "endian": {
+                    "type": "string",
+                    "description": "Target endianness: 'little' or 'big'",
+                    "enum": ["little", "big"]
+                }
+            },
+            "required": ["endian"]
+        })
+    },
+    {
+        "name": "t32_get_endian",
+        "description": "Get the current target endianness setting for a core.",
+        "inputSchema": _inject_core_id(None)
     },
     {
         "name": "t32_cmd",
@@ -175,7 +199,8 @@ TOOLS = [
         "name": "t32_read_memory",
         "description": (
             "Read target memory. Returns hex-encoded bytes. "
-            "Address can include access class prefix like 'D:0x1000' or 'P:0x2000'."
+            "Address can include access class prefix like 'D:0x1000' or 'P:0x2000'. "
+            "Use word_size (2 or 4) for endian-aware word interpretation."
         ),
         "inputSchema": _inject_core_id({
             "type": "object",
@@ -192,6 +217,11 @@ TOOLS = [
                     "type": "string",
                     "description": "Access class: D (data), P (program), SD, SP (default: D)",
                     "default": "D"
+                },
+                "word_size": {
+                    "type": "integer",
+                    "description": "Word size for endian-aware interpretation (2 or 4 bytes). Omit for raw bytes only.",
+                    "enum": [2, 4]
                 }
             },
             "required": ["address", "size"]
@@ -472,6 +502,19 @@ def _handle_list_cores(args):
     }
 
 
+def _handle_set_endian(args):
+    core_id = int(args.get("core_id", 0))
+    endian = args["endian"]
+    _core_manager.set_endianness(core_id, endian)
+    return {"status": "ok", "core_id": core_id, "endian": endian}
+
+
+def _handle_get_endian(args):
+    core_id = int(args.get("core_id", 0))
+    endian = _core_manager.get_endianness(core_id)
+    return {"core_id": core_id, "endian": endian}
+
+
 def _handle_cmd(args):
     client = _get_client(args)
     command = args["command"]
@@ -493,11 +536,25 @@ def _handle_get_state(args):
 
 def _handle_read_memory(args):
     client = _get_client(args)
+    core_id = int(args.get("core_id", 0))
     address = args["address"]
     size = int(args["size"])
     access = args.get("access", "D")
-    hex_data = client.read_memory_hex(address, size, access)
-    return {"address": str(address), "size": size, "hex": hex_data}
+    raw_data = client.read_memory(address, size, access)
+    hex_data = binascii.hexlify(raw_data).decode('ascii').upper()
+    endian = _core_manager.get_endianness(core_id)
+    result = {"address": str(address), "size": size, "endian": endian, "hex": hex_data}
+
+    word_size = args.get("word_size")
+    if word_size is not None:
+        word_size = int(word_size)
+        words = interpret_words(raw_data, word_size, endian)
+        fmt = "0x{{0:0{0}X}}".format(word_size * 2)
+        result["word_size"] = word_size
+        result["words"] = words
+        result["words_hex"] = [fmt.format(w) for w in words]
+
+    return result
 
 
 def _handle_write_memory(args):
@@ -627,6 +684,8 @@ _HANDLERS = {
     "t32_disconnect": _handle_disconnect,
     "t32_disconnect_all": _handle_disconnect_all,
     "t32_list_cores": _handle_list_cores,
+    "t32_set_endian": _handle_set_endian,
+    "t32_get_endian": _handle_get_endian,
     "t32_cmd": _handle_cmd,
     "t32_eval": _handle_eval,
     "t32_get_state": _handle_get_state,

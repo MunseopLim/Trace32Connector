@@ -137,3 +137,11 @@ DEFAULT_PACKLEN_UDP = 1024
 # ============================================================
 MAX_CORES = 16
 DEFAULT_BASE_PORT = 20000
+
+# ============================================================
+# Endianness
+# ============================================================
+ENDIAN_LITTLE = 'little'
+ENDIAN_BIG = 'big'
+ENDIAN_DEFAULT = ENDIAN_LITTLE
+VALID_ENDIANNESS = (ENDIAN_LITTLE, ENDIAN_BIG)

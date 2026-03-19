@@ -27,6 +27,7 @@ API Examples:
 """
 from __future__ import print_function
 
+import binascii
 import json
 import sys
 import os
@@ -44,7 +45,7 @@ except ImportError:
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from t32.client import Trace32Error
-from t32.core_manager import CoreManager
+from t32.core_manager import CoreManager, interpret_words
 
 # Global core manager
 _core_manager = CoreManager()
@@ -138,6 +139,19 @@ def _api_cores(body):
     }
 
 
+def _api_endian_set(body):
+    core_id = _get_core_id(body)
+    endian = body["endian"]
+    _core_manager.set_endianness(core_id, endian)
+    return {"status": "ok", "core_id": core_id, "endian": endian}
+
+
+def _api_endian_get(body):
+    core_id = _get_core_id(body)
+    endian = _core_manager.get_endianness(core_id)
+    return {"core_id": core_id, "endian": endian}
+
+
 def _api_cmd(body):
     command = body["command"]
     client = _get_client(body)
@@ -159,11 +173,25 @@ def _api_state(body):
 
 def _api_memory_read(body):
     client = _get_client(body)
+    core_id = _get_core_id(body)
     addr = body["address"]
     size = int(body["size"])
     access = body.get("access", "D")
-    hex_data = client.read_memory_hex(addr, size, access)
-    return {"address": str(addr), "size": size, "hex": hex_data}
+    raw_data = client.read_memory(addr, size, access)
+    hex_data = binascii.hexlify(raw_data).decode('ascii').upper()
+    endian = _core_manager.get_endianness(core_id)
+    result = {"address": str(addr), "size": size, "endian": endian, "hex": hex_data}
+
+    word_size = body.get("word_size")
+    if word_size is not None:
+        word_size = int(word_size)
+        words = interpret_words(raw_data, word_size, endian)
+        fmt = "0x{{0:0{0}X}}".format(word_size * 2)
+        result["word_size"] = word_size
+        result["words"] = words
+        result["words_hex"] = [fmt.format(w) for w in words]
+
+    return result
 
 
 def _api_memory_write(body):
@@ -296,6 +324,7 @@ _POST_ROUTES = {
     '/api/connect_all': _api_connect_all,
     '/api/disconnect': _api_disconnect,
     '/api/disconnect_all': _api_disconnect_all,
+    '/api/endian/set': _api_endian_set,
     '/api/cmd': _api_cmd,
     '/api/eval': _api_eval,
     '/api/memory/read': _api_memory_read,
@@ -321,6 +350,7 @@ _GET_ROUTES = {
     '/api/version': _api_version,
     '/api/ping': _api_ping,
     '/api/cores': _api_cores,
+    '/api/endian': _api_endian_get,
 }
 
 
