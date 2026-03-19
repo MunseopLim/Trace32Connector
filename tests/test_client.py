@@ -98,26 +98,41 @@ class MockTrace32Server(object):
         self._target_state = state
 
     def _serve(self):
-        """Accept one connection and handle requests."""
-        self._server_sock.settimeout(2.0)
-        try:
-            self._client_sock, _ = self._server_sock.accept()
-            self._client_sock.settimeout(1.0)
-        except socket.timeout:
-            return
+        """Accept connections and handle requests.
 
+        Supports multiple sequential connections so that disconnect/reconnect
+        works correctly (mirrors real TRACE32 behaviour).
+        """
+        self._server_sock.settimeout(2.0)
         while self._running:
             try:
-                msg = self._recv_msg()
-                if msg is None:
-                    break
-                resp = self._handle_msg(msg)
-                if resp is not None:
-                    self._send_msg(resp)
+                self._client_sock, _ = self._server_sock.accept()
+                self._client_sock.settimeout(1.0)
             except socket.timeout:
                 continue
-            except Exception:
+            except OSError:
                 break
+
+            while self._running:
+                try:
+                    msg = self._recv_msg()
+                    if msg is None:
+                        break
+                    resp = self._handle_msg(msg)
+                    if resp is not None:
+                        self._send_msg(resp)
+                except socket.timeout:
+                    continue
+                except Exception:
+                    break
+
+            # Clean up client socket before accepting next connection
+            if self._client_sock:
+                try:
+                    self._client_sock.close()
+                except Exception:
+                    pass
+                self._client_sock = None
 
     def _recv_msg(self):
         """Receive one framed message."""
