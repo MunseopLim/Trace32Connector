@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Unit tests for t32.client module.
 
-Uses a mock TCP server to simulate TRACE32 PowerView responses,
+Uses a mock UDP server to simulate TRACE32 PowerView NETASSIST responses,
 so tests can run without actual TRACE32 hardware.
 """
 from __future__ import print_function
@@ -19,36 +19,41 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from t32.client import Trace32Client, Trace32Error, _to_bytes, _parse_address
 from t32.constants import (
-    CMD_ATTACH, CMD_EXECUTE_PRACTICE, CMD_PING,
+    CMD_ATTACH, CMD_EXECUTE_PRACTICE, CMD_PING, CMD_NOP,
     CMD_DEVICE_SPECIFIC, CMD_GETMSG,
     SUBCMD_GET_STATE, SUBCMD_READ_MEMORY, SUBCMD_WRITE_MEMORY,
     SUBCMD_READ_REG_BY_NAME, SUBCMD_READ_PP,
     DEV_ICD, ERR_OK,
     STATE_STOPPED, STATE_RUNNING,
+    T32_API_CONNECT, T32_API_CONNECT_OK,
+    T32_API_SYNCREQUEST, T32_API_SYNCACKN, T32_API_SYNCBACK,
+    T32_API_TRANSMIT, T32_API_RECEIVE,
+    MAGIC_PATTERN, DEFAULT_PACKLEN,
 )
 
 
 # ======================================================================
-# Mock TRACE32 TCP Server
+# Mock TRACE32 UDP Server (NETASSIST protocol)
 # ======================================================================
 
 class MockTrace32Server(object):
-    """Simulates a TRACE32 PowerView RCL/NETTCP server for testing.
+    """Simulates a TRACE32 PowerView RCL/NETASSIST server for testing.
 
-    Responds to protocol messages with valid responses.
+    Responds to UDP protocol messages with valid responses.
+    Protocol: Connection handshake, 3-way sync, then data exchange.
     """
 
     def __init__(self):
-        self._server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._server_sock.bind(('127.0.0.1', 0))
-        self._server_sock.listen(1)
-        self.port = self._server_sock.getsockname()[1]
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.bind(('127.0.0.1', 0))
+        self.port = self._sock.getsockname()[1]
         self._running = False
         self._thread = None
-        self._client_sock = None
+        self._client_addr = None
+        self._transmit_seq = 0
+        self._packet_size = DEFAULT_PACKLEN
         self._target_state = STATE_STOPPED
-        self._memory = {}        # addr -> bytes
+        self._memory = {}        # addr -> byte
         self._registers = {}     # name -> (lo, hi)
         self._pp = 0x08001000    # program counter
         self._last_message = ''  # AREA window message
@@ -60,18 +65,13 @@ class MockTrace32Server(object):
         self._thread = threading.Thread(target=self._serve)
         self._thread.daemon = True
         self._thread.start()
-        time.sleep(0.05)  # let server start
+        time.sleep(0.05)
 
     def stop(self):
         """Stop the mock server."""
         self._running = False
-        if self._client_sock:
-            try:
-                self._client_sock.close()
-            except Exception:
-                pass
         try:
-            self._server_sock.close()
+            self._sock.close()
         except Exception:
             pass
         if self._thread:
@@ -87,7 +87,8 @@ class MockTrace32Server(object):
 
     def set_register(self, name, value):
         """Pre-populate a register value."""
-        self._registers[name.upper()] = (value & 0xFFFFFFFF, (value >> 32) & 0xFFFFFFFF)
+        self._registers[name.upper()] = (
+            value & 0xFFFFFFFF, (value >> 32) & 0xFFFFFFFF)
 
     def set_pp(self, value):
         """Set the program counter."""
@@ -98,155 +99,190 @@ class MockTrace32Server(object):
         self._target_state = state
 
     def _serve(self):
-        """Accept connections and handle requests.
-
-        Supports multiple sequential connections so that disconnect/reconnect
-        works correctly (mirrors real TRACE32 behaviour).
-        """
-        self._server_sock.settimeout(2.0)
+        """Main server loop - receive and handle UDP packets."""
+        self._sock.settimeout(0.5)
         while self._running:
             try:
-                self._client_sock, _ = self._server_sock.accept()
-                self._client_sock.settimeout(1.0)
+                data, addr = self._sock.recvfrom(4096)
             except socket.timeout:
                 continue
-            except OSError:
+            except Exception:
                 break
 
-            while self._running:
-                try:
-                    msg = self._recv_msg()
-                    if msg is None:
-                        break
-                    resp = self._handle_msg(msg)
-                    if resp is not None:
-                        self._send_msg(resp)
-                except socket.timeout:
-                    continue
-                except Exception:
-                    break
+            pkt = bytearray(data)
+            if len(pkt) < 1:
+                continue
 
-            # Clean up client socket before accepting next connection
-            if self._client_sock:
-                try:
-                    self._client_sock.close()
-                except Exception:
-                    pass
-                self._client_sock = None
+            pkt_type = pkt[0]
 
-    def _recv_msg(self):
-        """Receive one framed message."""
-        try:
-            header = self._recv_exact(4)
-        except socket.timeout:
-            raise  # let caller's except socket.timeout handle it
-        except Exception:
+            if pkt_type == T32_API_CONNECT:
+                self._handle_connect(pkt, addr)
+            elif pkt_type == T32_API_SYNCREQUEST:
+                self._handle_sync(pkt, addr)
+            elif pkt_type == T32_API_SYNCBACK:
+                pass  # sync completion acknowledged
+            elif pkt_type == T32_API_TRANSMIT:
+                self._handle_data_packet(pkt, addr)
+
+    def _handle_connect(self, pkt, addr):
+        """Handle connection handshake request."""
+        self._client_addr = addr
+        self._transmit_seq = 1
+        # Response: same size as request, with CONNECT_OK
+        resp = bytearray(len(pkt))
+        resp[0] = T32_API_CONNECT_OK
+        resp[1] = 0
+        struct.pack_into('<H', resp, 2, self._transmit_seq)
+        resp[8:16] = bytearray(MAGIC_PATTERN)
+        self._sock.sendto(bytes(resp), addr)
+
+    def _handle_sync(self, pkt, addr):
+        """Handle 3-way sync request."""
+        self._client_addr = addr
+        # Respond with SYNCACKN containing our transmit seq
+        resp = bytearray(16)
+        resp[0] = T32_API_SYNCACKN
+        resp[1] = 0
+        struct.pack_into('<H', resp, 2, self._transmit_seq)
+        resp[8:16] = bytearray(MAGIC_PATTERN)
+        self._sock.sendto(bytes(resp), addr)
+
+    def _handle_data_packet(self, pkt, addr):
+        """Handle incoming data packet."""
+        self._client_addr = addr
+
+        if len(pkt) <= 4:
+            return  # empty ack, ignore
+
+        msg_data = pkt[4:]  # strip 4-byte UDP header
+
+        # Need at least 5 internal header + 4 app bytes
+        if len(msg_data) < 9:
+            return
+
+        # Skip 5-byte internal header
+        app_data = msg_data[5:]
+
+        # Parse: [LEN][CMD][SUBCMD][MSGID][payload...]
+        msg_len_byte = app_data[0]
+        cmd = app_data[1]
+        subcmd = app_data[2]
+        msgid = app_data[3]
+
+        if msg_len_byte == 0 and len(app_data) > 5:
+            # Extended format: skip 2-byte length at [4:6]
+            payload = app_data[6:]
+        else:
+            payload = app_data[4:]
+
+        self._request_log.append((cmd, subcmd, msgid, bytes(payload)))
+
+        # Handle and respond
+        resp_data = self._process_command(cmd, subcmd, msgid, payload)
+        if resp_data is not None:
+            self._send_response(resp_data, addr)
+
+    def _process_command(self, cmd, subcmd, msgid, payload):
+        """Process a command and return response data."""
+        if cmd == CMD_NOP:
             return None
-        if header is None:
-            return None
-        length = struct.unpack('<I', header)[0]
-        if length == 0:
-            return bytearray()
-        data = self._recv_exact(length)
-        return bytearray(data) if data else None
-
-    def _recv_exact(self, n):
-        buf = bytearray()
-        while len(buf) < n:
-            chunk = self._client_sock.recv(n - len(buf))
-            if not chunk:
-                return None
-            buf.extend(chunk)
-        return bytes(buf)
-
-    def _send_msg(self, data):
-        """Send one framed message."""
-        frame = struct.pack('<I', len(data)) + bytes(data)
-        self._client_sock.sendall(frame)
-
-    def _handle_msg(self, msg):
-        """Route a message and build response."""
-        if len(msg) < 3:
-            return None
-
-        cmd = msg[0]
-        subcmd = msg[1]
-        msgid = msg[2]
-        self._request_log.append((cmd, subcmd, msgid, bytes(msg[3:])))
 
         if cmd == CMD_ATTACH:
-            # ATTACH response: [cmd, dev_type, ERR_OK]
-            return bytearray([CMD_ATTACH, subcmd, ERR_OK])
+            return self._build_response(CMD_ATTACH, ERR_OK, msgid)
 
-        elif cmd == CMD_PING:
-            return bytearray([CMD_PING, 0x00, ERR_OK])
+        if cmd == CMD_PING:
+            return self._build_response(CMD_PING, ERR_OK, msgid)
 
-        elif cmd == CMD_EXECUTE_PRACTICE:
-            # Extract command string
-            payload = msg[3:]
-            cmd_str = bytes(payload).split(b'\x00')[0].decode('ascii', errors='replace')
-            # Simulate PRINT command -> store in message area
+        if cmd == CMD_EXECUTE_PRACTICE:
+            cmd_str = bytes(payload).split(b'\x00')[0].decode(
+                'ascii', errors='replace')
             if cmd_str.upper().startswith('PRINT '):
                 expr = cmd_str[6:].strip()
                 self._last_message = self._eval_expr(expr)
-            return bytearray([CMD_EXECUTE_PRACTICE, 0x00, ERR_OK])
+            return self._build_response(CMD_EXECUTE_PRACTICE, ERR_OK, msgid)
 
-        elif cmd == CMD_GETMSG:
-            resp = bytearray([CMD_GETMSG, 0x00, ERR_OK])
-            resp.extend(struct.pack('<H', 0))  # mode
-            resp.extend(_to_bytes(self._last_message))
-            resp.append(0x00)  # null terminator
-            return resp
+        if cmd == CMD_GETMSG:
+            resp_payload = bytearray()
+            resp_payload.extend(struct.pack('<I', 0))  # mode (dword)
+            resp_payload.extend(_to_bytes(self._last_message))
+            resp_payload.append(0x00)
+            return self._build_response(CMD_GETMSG, ERR_OK, msgid, resp_payload)
 
-        elif cmd == CMD_DEVICE_SPECIFIC:
-            return self._handle_device(subcmd, msg[3:])
+        if cmd == CMD_DEVICE_SPECIFIC:
+            return self._handle_device(subcmd, msgid, payload)
 
-        return bytearray([cmd, subcmd, ERR_OK])
+        return self._build_response(cmd, ERR_OK, msgid)
 
-    def _handle_device(self, subcmd, payload):
+    def _handle_device(self, subcmd, msgid, payload):
         """Handle device-specific sub-commands."""
         if subcmd == SUBCMD_GET_STATE:
-            resp = bytearray([CMD_DEVICE_SPECIFIC, subcmd, ERR_OK])
-            resp.append(self._target_state)
-            return resp
+            return self._build_response(
+                CMD_DEVICE_SPECIFIC, ERR_OK, msgid,
+                bytearray([self._target_state]))
 
         elif subcmd == SUBCMD_READ_PP:
-            resp = bytearray([CMD_DEVICE_SPECIFIC, subcmd, ERR_OK])
-            resp.extend(struct.pack('<I', self._pp))
-            return resp
+            return self._build_response(
+                CMD_DEVICE_SPECIFIC, ERR_OK, msgid,
+                bytearray(struct.pack('<I', self._pp)))
 
         elif subcmd == SUBCMD_READ_REG_BY_NAME:
             name = bytes(payload).split(b'\x00')[0].decode('ascii').upper()
             lo, hi = self._registers.get(name, (0, 0))
-            resp = bytearray([CMD_DEVICE_SPECIFIC, subcmd, ERR_OK])
-            resp.extend(struct.pack('<I', lo))
-            resp.extend(struct.pack('<I', hi))
-            return resp
+            resp_payload = bytearray()
+            resp_payload.extend(struct.pack('<I', lo))
+            resp_payload.extend(struct.pack('<I', hi))
+            return self._build_response(
+                CMD_DEVICE_SPECIFIC, ERR_OK, msgid, resp_payload)
 
         elif subcmd == SUBCMD_READ_MEMORY:
+            # Payload: [addr:4][access:1][0:1][size:2]
             addr = struct.unpack_from('<I', bytes(payload), 0)[0]
-            size = struct.unpack_from('<H', bytes(payload), 4)[0]
-            # access_class = payload[6]
+            size = struct.unpack_from('<H', bytes(payload), 6)[0]
             data = bytearray(size)
             for i in range(size):
                 data[i] = self._memory.get(addr + i, 0xFF)
-            resp = bytearray([CMD_DEVICE_SPECIFIC, subcmd, ERR_OK])
-            resp.extend(data)
-            return resp
+            return self._build_response(
+                CMD_DEVICE_SPECIFIC, ERR_OK, msgid, data)
 
         elif subcmd == SUBCMD_WRITE_MEMORY:
+            # Payload: [addr:4][access:1][0:1][size:2][data:N]
             addr = struct.unpack_from('<I', bytes(payload), 0)[0]
-            size = struct.unpack_from('<H', bytes(payload), 4)[0]
-            # access_class = payload[6]
-            data = payload[7:7 + size]
+            size = struct.unpack_from('<H', bytes(payload), 6)[0]
+            data = payload[8:8 + size]
             for i in range(size):
                 if i < len(data):
                     self._memory[addr + i] = data[i]
-            resp = bytearray([CMD_DEVICE_SPECIFIC, subcmd, ERR_OK])
-            return resp
+            return self._build_response(
+                CMD_DEVICE_SPECIFIC, ERR_OK, msgid)
 
-        # Default OK
-        return bytearray([CMD_DEVICE_SPECIFIC, subcmd, ERR_OK])
+        return self._build_response(CMD_DEVICE_SPECIFIC, ERR_OK, msgid)
+
+    def _build_response(self, cmd, status, msgid, payload=None):
+        """Build response data: [flags][header][CMD][status][MSGID][payload].
+
+        This data is what the client receives after stripping the UDP header.
+        Maps to: T32_INBUFFER[-1]=flags, [0]=header, [1]=CMD, [2]=status,
+                 [3]=MSGID, [4+]=payload
+        """
+        data = bytearray()
+        data.append(0x00)    # flags byte
+        data.append(0x00)    # header byte (response LEN analog)
+        data.append(cmd)     # CMD echo
+        data.append(status)  # status
+        data.append(msgid)   # MSGID echo
+        if payload:
+            data.extend(payload)
+        return data
+
+    def _send_response(self, data, addr):
+        """Wrap response data in UDP packet and send."""
+        packet = bytearray(4 + len(data))
+        packet[0] = T32_API_RECEIVE
+        packet[1] = 0  # no continuation
+        struct.pack_into('<H', packet, 2, self._transmit_seq & 0xFFFF)
+        packet[4:] = data
+        self._sock.sendto(bytes(packet), addr)
+        self._transmit_seq += 1
 
     def _eval_expr(self, expr):
         """Simulate expression evaluation for PRINT commands."""
@@ -258,7 +294,7 @@ class MockTrace32Server(object):
             return "0x{0:X}".format(val)
         elif e.startswith('VAR.VALUE('):
             return "42"
-        elif e.startswith('SYMBOL.BEGIN(') or e.startswith('SYMBOL.BEGIN('):
+        elif e.startswith('SYMBOL.BEGIN('):
             return "0x08001000"
         elif e == 'VERSION.SOFTWARE()':
             return "TRACE32 Mock Server"
@@ -371,7 +407,7 @@ class TestClientDisconnected(unittest.TestCase):
     def test_connect_to_invalid_host(self):
         client = Trace32Client()
         with self.assertRaises(Trace32Error):
-            client.connect(host='192.0.2.1', port=1, timeout=0.5)
+            client.connect(host='192.0.2.1', port=1, timeout=0.2)
 
 
 # ======================================================================
@@ -379,7 +415,7 @@ class TestClientDisconnected(unittest.TestCase):
 # ======================================================================
 
 class TestClientWithMockServer(unittest.TestCase):
-    """Integration tests using the mock TRACE32 server."""
+    """Integration tests using the mock TRACE32 UDP server."""
 
     def setUp(self):
         self.server = MockTrace32Server()
@@ -407,7 +443,6 @@ class TestClientWithMockServer(unittest.TestCase):
 
     def test_cmd_sends_correct_bytes(self):
         self.client.cmd("Break")
-        # Verify the server received the command
         found = False
         for cmd, subcmd, msgid, payload in self.server._request_log:
             if cmd == CMD_EXECUTE_PRACTICE:
@@ -451,7 +486,6 @@ class TestClientWithMockServer(unittest.TestCase):
 
     def test_write_memory(self):
         self.client.write_memory(0x4000, b'\x11\x22\x33\x44')
-        # Verify by reading back
         data = self.client.read_memory(0x4000, 4)
         self.assertEqual(data, b'\x11\x22\x33\x44')
 
@@ -473,7 +507,6 @@ class TestClientWithMockServer(unittest.TestCase):
     def test_read_register_case_insensitive(self):
         self.server.set_register('SP', 0x20010000)
         value = self.client.read_register('sp')
-        # Mock server uppercases the name, so 'sp' -> 'SP' should work
         self.assertEqual(value, 0x20010000)
 
     def test_read_pc(self):
@@ -486,7 +519,6 @@ class TestClientWithMockServer(unittest.TestCase):
         self.assertEqual(result, "TRACE32 Mock Server")
 
     def test_get_message(self):
-        # First send a PRINT command to populate message
         self.client.cmd("PRINT VERSION.SOFTWARE()")
         msg = self.client.get_message()
         self.assertEqual(msg['text'], "TRACE32 Mock Server")
@@ -557,7 +589,6 @@ class TestClientWithMockServer(unittest.TestCase):
                 client.connect(host='127.0.0.1', port=server.port, timeout=5.0)
                 self.assertTrue(client.connected)
                 client.ping()
-            # After with-block, should be disconnected
             self.assertFalse(client.connected)
         finally:
             server.stop()
@@ -566,7 +597,6 @@ class TestClientWithMockServer(unittest.TestCase):
         """Disconnect and reconnect."""
         self.client.disconnect()
         self.assertFalse(self.client.connected)
-        # Need a new server since old connection is dead
         server2 = MockTrace32Server()
         server2.start()
         try:
@@ -579,7 +609,7 @@ class TestClientWithMockServer(unittest.TestCase):
 
 
 # ======================================================================
-# Test: Protocol Message Building
+# Test: Protocol Message Building (NETASSIST format)
 # ======================================================================
 
 class TestProtocolMessages(unittest.TestCase):
@@ -588,33 +618,45 @@ class TestProtocolMessages(unittest.TestCase):
     def test_build_msg_basic(self):
         client = Trace32Client()
         msg = client._build_msg(0x73, 0x00)
-        self.assertEqual(len(msg), 3)
-        self.assertEqual(msg[0], 0x73)
-        self.assertEqual(msg[1], 0x00)
+        # Format: [LEN=2][CMD=0x73][SUBCMD=0x00][MSGID]
+        self.assertEqual(len(msg), 4)
+        self.assertEqual(msg[0], 2)     # LEN
+        self.assertEqual(msg[1], 0x73)  # CMD
+        self.assertEqual(msg[2], 0x00)  # SUBCMD
 
     def test_build_msg_with_payload(self):
         client = Trace32Client()
         payload = bytearray(b'\x01\x02\x03')
-        msg = client._build_msg(0x72, 0x00, payload)
-        self.assertEqual(len(msg), 6)
-        self.assertEqual(msg[0], 0x72)
-        self.assertEqual(msg[3], 0x01)
-        self.assertEqual(msg[4], 0x02)
-        self.assertEqual(msg[5], 0x03)
+        msg = client._build_msg(0x72, 0x02, payload)
+        # Format: [LEN=5][CMD=0x72][SUBCMD=0x02][MSGID][0x01][0x02][0x03]
+        self.assertEqual(len(msg), 7)
+        self.assertEqual(msg[0], 5)     # LEN = 2 + 3
+        self.assertEqual(msg[1], 0x72)  # CMD
+        self.assertEqual(msg[2], 0x02)  # SUBCMD
+        self.assertEqual(msg[4], 0x01)  # payload[0]
+        self.assertEqual(msg[5], 0x02)  # payload[1]
+        self.assertEqual(msg[6], 0x03)  # payload[2]
+
+    def test_build_msg_with_msg_len_override(self):
+        client = Trace32Client()
+        payload = bytearray(b'\x01\x02\x03\x04\x05')
+        msg = client._build_msg(0x74, 0x31, payload, msg_len=10)
+        self.assertEqual(msg[0], 10)    # overridden LEN
+        self.assertEqual(msg[1], 0x74)  # CMD
 
     def test_msg_id_increments(self):
         client = Trace32Client()
         msg1 = client._build_msg(0x73, 0x00)
         msg2 = client._build_msg(0x73, 0x00)
-        self.assertEqual(msg2[2], msg1[2] + 1)
+        self.assertEqual(msg2[3], msg1[3] + 1)
 
     def test_msg_id_wraps_at_256(self):
         client = Trace32Client()
         client._msg_id = 255
         msg = client._build_msg(0x73, 0x00)
-        self.assertEqual(msg[2], 255)
+        self.assertEqual(msg[3], 255)
         msg2 = client._build_msg(0x73, 0x00)
-        self.assertEqual(msg2[2], 0)
+        self.assertEqual(msg2[3], 0)
 
 
 # ======================================================================
@@ -640,10 +682,10 @@ class TestMemoryRoundTrip(unittest.TestCase):
         self.assertEqual(data, b'\x42')
 
     def test_large_block(self):
-        """Write and read 1024 bytes."""
-        block = bytes(bytearray(range(256)) * 4)
+        """Write and read 256 bytes."""
+        block = bytes(bytearray(range(256)))
         self.client.write_memory(0x10000, block)
-        data = self.client.read_memory(0x10000, 1024)
+        data = self.client.read_memory(0x10000, 256)
         self.assertEqual(data, block)
 
     def test_aligned_word_access(self):

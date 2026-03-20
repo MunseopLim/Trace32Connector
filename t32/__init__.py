@@ -3,7 +3,7 @@
 """TRACE32 Remote API Client Library.
 
 Pure Python implementation of the Lauterbach TRACE32 Remote Control
-protocol over TCP (NETTCP). Compatible with Python 2.7 and 3.4+.
+protocol over UDP (NETASSIST). Compatible with Python 2.7 and 3.4+.
 No external dependencies required.
 """
 from __future__ import print_function

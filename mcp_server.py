@@ -62,7 +62,7 @@ TOOLS = [
         "name": "t32_connect",
         "description": (
             "Connect to a running TRACE32 PowerView instance. "
-            "PowerView must have RCL=NETTCP enabled in config.t32. "
+            "PowerView must have RCL=NETASSIST enabled in config.t32. "
             "Use core_id for multi-core setups (0-15)."
         ),
         "inputSchema": {

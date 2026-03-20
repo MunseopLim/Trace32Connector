@@ -18,13 +18,13 @@ TRACE32 PowerView를 AI가 제어할 수 있게 하는 MCP 서버 / HTTP API / P
 ## 프로젝트 구조
 
 ```
-t32/constants.py      — RCL 프로토콜 상수 (CMD, SUBCMD, STATE, ACCESS, MAX_CORES 등)
-t32/client.py         — TCP 소켓 기반 TRACE32 클라이언트 (핵심)
+t32/constants.py      — RCL 프로토콜 상수 (CMD, SUBCMD, STATE, ACCESS, NETASSIST 등)
+t32/client.py         — UDP 소켓 기반 TRACE32 클라이언트 (NETASSIST 프로토콜)
 t32/core_manager.py   — 멀티코어 매니저 + 엔디안 설정 + interpret_words()
 mcp_server.py         — MCP stdio 서버 (JSON-RPC 2.0, 26개 tools, 멀티코어/엔디안)
 http_server.py        — HTTP REST API 서버 (port 8032, 멀티코어/엔디안)
 config.json           — 기본 설정 (host, port, timeout)
-tests/                — 유닛 테스트 (unittest + mock TCP 서버)
+tests/                — 유닛 테스트 (unittest + mock UDP 서버)
 ```
 
 ## 멀티코어 지원
@@ -59,22 +59,27 @@ python -m pytest tests/ -v --tb=short
 python -m unittest discover -s . -p '*test*.py' -v
 ```
 
-Mock TCP 서버(`tests/test_client.py:MockTrace32Server`)를 사용하므로 실제 TRACE32 없이 테스트 가능.
+Mock UDP 서버(`tests/test_client.py:MockTrace32Server`)를 사용하므로 실제 TRACE32 없이 테스트 가능.
 16코어 시뮬레이션 테스트 포함 (`tests/test_core_manager.py:TestCoreManagerSixteenCores`).
 
-## 프로토콜 구조
+## 프로토콜 구조 (NETASSIST/UDP)
 
-TCP 프레임: `[4바이트 LE 길이][메시지 본문]`
-메시지 본문: `[CMD:1][SUBCMD:1][MSGID:1][페이로드:N]`
+UDP 패킷: `[타입:1][플래그:1][시퀀스:2][데이터]`
+메시지 본문: `[LEN:1][CMD:1][SUBCMD:1][MSGID:1][페이로드:N]`
 
-프로토콜 레퍼런스: TRACE32 설치 디렉토리 `~~/demo/api/capi/src/hremote.c`
+연결 흐름: UDP 핸드셰이크 → 3-way Sync (SYNCREQUEST/SYNCACKN/SYNCBACK) → ATTACH
+
+프로토콜 레퍼런스: TRACE32 설치 디렉토리 `~~/demo/api/capi/src/hremote.c`, `hlinknet.c`
+
+**참고**: NETTCP(TCP)는 PowerDebug X50에서만 지원. PowerDebug II/III는 NETASSIST(UDP)만 가능.
 
 ## TRACE32 설정
 
 config.t32에 추가 (코어당 별도 인스턴스):
 ```
-RCL=NETTCP
+RCL=NETASSIST
 PORT=20000
+PACKLEN=1024
 ```
 
 멀티코어 환경에서는 각 코어별 PowerView가 연속 포트를 사용:

@@ -124,13 +124,47 @@ BP_TYPES = {
 }
 
 # ============================================================
+# PRACTICE Command Sub-Command
+# ============================================================
+SUBCMD_EXECUTE_PRACTICE = 0x02   # Sub-command for CMD_EXECUTE_PRACTICE
+
+# ============================================================
 # Protocol Defaults
 # ============================================================
 DEFAULT_HOST = 'localhost'
 DEFAULT_PORT = 20000
 DEFAULT_TIMEOUT = 10.0
-DEFAULT_PACKLEN_TCP = 16384
+DEFAULT_PACKLEN = 1024
 DEFAULT_PACKLEN_UDP = 1024
+
+# ============================================================
+# NETASSIST Protocol Constants (UDP)
+# ============================================================
+
+# Packet types (byte 0 of UDP packet)
+T32_API_CONNECT = 0x03           # Connection request
+T32_API_CONNECT_OK = 0x13        # Connection OK response
+T32_API_CONNECT_REFUSED_IP = 0x23  # Connection refused (with IP)
+T32_API_CONNECT_ERROR = 0x53     # Connection error
+
+T32_API_RECEIVE = 0x01           # Data packet (server -> client)
+T32_API_TRANSMIT = 0x11          # Data packet (client -> server)
+T32_API_NOTIFICATION = 0x06      # Notification packet
+
+T32_API_SYNCREQUEST = 0x02       # Sync request
+T32_API_SYNCACKN = 0x12          # Sync acknowledgment
+T32_API_SYNCBACK = 0x22          # Sync back (completion)
+
+T32_API_HANDSHAKE = 0x07         # Flow control handshake
+
+# Message flags (in response header byte)
+T32_MSG_LHANDLE = 0x10           # Toggle bit
+T32_MSG_LRETRY = 0x08            # Retransmit request
+
+# Protocol constants
+MAGIC_PATTERN = b'TRACE32\x00'
+MAXRETRY = 5
+PCKLEN_MAX = 1472
 
 # ============================================================
 # Multi-Core Defaults

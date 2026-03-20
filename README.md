@@ -9,7 +9,7 @@
 ## 요구사항
 
 - Python 2.7 이상 (외부 라이브러리 불필요)
-- TRACE32 PowerView (09/2020 이상, RCL=NETTCP 지원)
+- TRACE32 PowerView (09/2020 이상, RCL=NETASSIST 지원)
 
 ## 빠른 시작
 
@@ -18,8 +18,9 @@
 `config.t32` 파일에 아래 내용을 추가하고 PowerView를 재시작:
 
 ```
-RCL=NETTCP
+RCL=NETASSIST
 PORT=20000
+PACKLEN=1024
 ```
 
 ### 2-A. MCP Server (AI 에이전트 연동)
@@ -143,18 +144,17 @@ Mock TCP 서버를 사용하므로 실제 TRACE32 하드웨어 없이 전체 테
 
 ## 프로토콜 참고
 
-TRACE32 RCL (Remote Control) 프로토콜 구현 기반:
-- TCP 프레임: `[4바이트 LE 길이][메시지]`
-- 메시지: `[CMD][SUBCMD][MSGID][페이로드]`
-- 레퍼런스: `<T32_DIR>/demo/api/capi/src/hremote.c`
+TRACE32 RCL (Remote Control) NETASSIST 프로토콜 구현 기반:
+- UDP 패킷: `[타입:1][플래그:1][시퀀스:2][데이터]`
+- 메시지: `[LEN][CMD][SUBCMD][MSGID][페이로드]`
+- 연결: UDP 핸드셰이크 → 3-way Sync → ATTACH
+- 레퍼런스: `<T32_DIR>/demo/api/capi/src/hremote.c`, `hlinknet.c`
 
-실제 TRACE32에 연결 후 프로토콜 동작이 예상과 다르면, 위 소스를 참고하여
-[t32/client.py](t32/client.py)의 `_build_msg`, `_send`, `_recv` 메서드를 조정하세요.
+**참고**: NETTCP(TCP)는 PowerDebug X50에서만 지원됩니다. PowerDebug II/III 등 이전 모델은 NETASSIST(UDP)를 사용해야 합니다.
 
 ## 향후 확장 가능 방향
 
 - [ ] ctypes 기반 t32api.dll 래퍼 (lib/ 디렉토리에 DLL 복사 후 사용)
-- [ ] 멀티 코어/디바이스 동시 연결 지원
 - [ ] PRACTICE 스크립트 실행 상태 모니터링 (polling)
 - [ ] 메모리 덤프 파일 저장/로드
 - [ ] WebSocket 실시간 이벤트 스트리밍

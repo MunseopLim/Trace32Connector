@@ -178,38 +178,31 @@ class TestCoreManagerConnectAll(unittest.TestCase):
         self.mgr = CoreManager()
         self.mocks = []
         # We need consecutive ports, so bind them manually
-        import socket
-        # Find a base port by binding to 0 and using that range
+        import socket as sock_mod
+        # Find available ports by binding UDP sockets
         socks = []
         ports = []
         for _ in range(self.NUM_CORES):
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s = sock_mod.socket(sock_mod.AF_INET, sock_mod.SOCK_DGRAM)
             s.bind(('127.0.0.1', 0))
             ports.append(s.getsockname()[1])
             socks.append(s)
         for s in socks:
             s.close()
-        # These ports may not be consecutive, so use individual mocks
         self.base_port = ports[0]
         self.ports = ports
 
         for port in ports:
             mock = MockTrace32Server.__new__(MockTrace32Server)
             mock.__init__()
-            # Override port
-            mock._server_sock.close()
-            import socket as sock_mod
-            mock._server_sock = sock_mod.socket(sock_mod.AF_INET, sock_mod.SOCK_STREAM)
-            mock._server_sock.setsockopt(sock_mod.SOL_SOCKET, sock_mod.SO_REUSEADDR, 1)
+            # Override port: close the auto-assigned socket and rebind
+            mock._sock.close()
+            mock._sock = sock_mod.socket(sock_mod.AF_INET, sock_mod.SOCK_DGRAM)
             try:
-                mock._server_sock.bind(('127.0.0.1', port))
-                mock._server_sock.listen(1)
+                mock._sock.bind(('127.0.0.1', port))
                 mock.port = port
                 mock.set_register('PC', 0x08001000)
-                t = threading.Thread(target=mock.start)
-                t.daemon = True
-                t.start()
+                mock.start()
                 self.mocks.append(mock)
             except Exception:
                 self.mocks.append(None)
