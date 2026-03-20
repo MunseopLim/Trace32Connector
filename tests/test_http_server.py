@@ -17,6 +17,11 @@ except ImportError:
     from BaseHTTPServer import HTTPServer
 
 try:
+    from socketserver import ThreadingMixIn
+except ImportError:
+    from SocketServer import ThreadingMixIn
+
+try:
     from urllib.request import urlopen, Request
     from urllib.error import HTTPError, URLError
 except ImportError:
@@ -29,6 +34,15 @@ import socket
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from http_server import Trace32Handler, _POST_ROUTES, _GET_ROUTES
+
+
+class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    """HTTP server that handles each request in a new thread.
+
+    Prevents a slow handler (e.g. connect to unreachable host) from
+    blocking other requests in the test suite.
+    """
+    daemon_threads = True
 
 
 def _find_free_port():
@@ -91,7 +105,7 @@ class TestHttpServer(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.port = _find_free_port()
-        cls.server = HTTPServer(('127.0.0.1', cls.port), Trace32Handler)
+        cls.server = _ThreadingHTTPServer(('127.0.0.1', cls.port), Trace32Handler)
         cls.thread = threading.Thread(target=cls.server.serve_forever)
         cls.thread.daemon = True
         cls.thread.start()
@@ -119,7 +133,7 @@ class TestHttpServer(unittest.TestCase):
                 body = body.decode('utf-8')
             return e.code, json.loads(body)
 
-    def _post(self, path, data=None):
+    def _post(self, path, data=None, timeout=5):
         """Make a POST request with JSON body."""
         url = self.base_url + path
         body = json.dumps(data or {})
@@ -128,7 +142,7 @@ class TestHttpServer(unittest.TestCase):
         req = Request(url, data=body)
         req.add_header('Content-Type', 'application/json')
         try:
-            resp = urlopen(req, timeout=5)
+            resp = urlopen(req, timeout=timeout)
             resp_body = resp.read()
             if isinstance(resp_body, bytes):
                 resp_body = resp_body.decode('utf-8')
@@ -185,10 +199,12 @@ class TestHttpServer(unittest.TestCase):
 
     def test_post_connect_invalid_host(self):
         """POST /api/connect with unreachable host returns error."""
+        # T32 connect retries up to 10x with DEFAULT_TIMEOUT each,
+        # so we need a longer HTTP timeout to wait for the error response.
         code, data = self._post('/api/connect', {
             "host": "127.0.0.1",
             "port": 1
-        })
+        }, timeout=120)
         self.assertEqual(code, 500)
         self.assertIn('error', data)
 

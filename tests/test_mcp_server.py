@@ -16,7 +16,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from mcp_server import (
     _handle_request, _make_response, _make_error,
-    TOOLS, _HANDLERS,
+    TOOLS, _HANDLERS, PROMPTS, RESOURCES,
+    _PROMPT_CONTENTS, _RESOURCE_CONTENTS,
 )
 
 
@@ -57,6 +58,8 @@ class TestInitialize(unittest.TestCase):
         result = response["result"]
         self.assertEqual(result["protocolVersion"], "2024-11-05")
         self.assertIn("tools", result["capabilities"])
+        self.assertIn("prompts", result["capabilities"])
+        self.assertIn("resources", result["capabilities"])
         self.assertIn("serverInfo", result)
         self.assertEqual(result["serverInfo"]["name"], "trace32-mcp-server")
 
@@ -180,15 +183,19 @@ class TestMethodNotFound(unittest.TestCase):
         self.assertIn("error", response)
         self.assertEqual(response["error"]["code"], -32601)
 
-    def test_resources_list_returns_empty(self):
+    def test_resources_list_returns_resources(self):
         request = {"jsonrpc": "2.0", "id": 6, "method": "resources/list", "params": {}}
         response = _handle_request(request)
-        self.assertEqual(response["result"]["resources"], [])
+        resources = response["result"]["resources"]
+        self.assertIsInstance(resources, list)
+        self.assertGreater(len(resources), 0)
 
-    def test_prompts_list_returns_empty(self):
+    def test_prompts_list_returns_prompts(self):
         request = {"jsonrpc": "2.0", "id": 7, "method": "prompts/list", "params": {}}
         response = _handle_request(request)
-        self.assertEqual(response["result"]["prompts"], [])
+        prompts = response["result"]["prompts"]
+        self.assertIsInstance(prompts, list)
+        self.assertGreater(len(prompts), 0)
 
     def test_ping(self):
         request = {"jsonrpc": "2.0", "id": 8, "method": "ping", "params": {}}
@@ -225,6 +232,120 @@ class TestToolSchemas(unittest.TestCase):
                     self.assertIn(req, props,
                                   "Tool '{0}': required field '{1}' not in properties".format(
                                       tool["name"], req))
+
+
+class TestPrompts(unittest.TestCase):
+    """Test MCP prompts functionality."""
+
+    def test_prompts_list_returns_all(self):
+        request = {"jsonrpc": "2.0", "id": 1, "method": "prompts/list", "params": {}}
+        response = _handle_request(request)
+        prompts = response["result"]["prompts"]
+        names = [p["name"] for p in prompts]
+        self.assertIn("trace32-debug-workflow", names)
+        self.assertIn("trace32-multicore-workflow", names)
+
+    def test_prompts_have_description(self):
+        for prompt in PROMPTS:
+            self.assertIn("name", prompt)
+            self.assertIn("description", prompt)
+            self.assertTrue(len(prompt["description"]) > 0)
+
+    def test_all_prompts_have_content(self):
+        for prompt in PROMPTS:
+            self.assertIn(prompt["name"], _PROMPT_CONTENTS,
+                          "Prompt '{0}' has no content".format(prompt["name"]))
+
+    def test_prompts_get_debug_workflow(self):
+        request = {
+            "jsonrpc": "2.0", "id": 1, "method": "prompts/get",
+            "params": {"name": "trace32-debug-workflow"}
+        }
+        response = _handle_request(request)
+        result = response["result"]
+        self.assertIn("messages", result)
+        self.assertIsInstance(result["messages"], list)
+        self.assertGreater(len(result["messages"]), 0)
+        msg = result["messages"][0]
+        self.assertEqual(msg["role"], "user")
+        self.assertIn("MCP tools", msg["content"]["text"])
+
+    def test_prompts_get_multicore_workflow(self):
+        request = {
+            "jsonrpc": "2.0", "id": 2, "method": "prompts/get",
+            "params": {"name": "trace32-multicore-workflow"}
+        }
+        response = _handle_request(request)
+        result = response["result"]
+        self.assertIn("messages", result)
+        self.assertIn("multi-core", result["messages"][0]["content"]["text"].lower())
+
+    def test_prompts_get_unknown_returns_error(self):
+        request = {
+            "jsonrpc": "2.0", "id": 3, "method": "prompts/get",
+            "params": {"name": "nonexistent"}
+        }
+        response = _handle_request(request)
+        self.assertIn("error", response)
+        self.assertEqual(response["error"]["code"], -32602)
+
+    def test_prompt_content_mentions_no_scripts(self):
+        """Debug workflow should tell AI not to write scripts."""
+        content = _PROMPT_CONTENTS["trace32-debug-workflow"]
+        self.assertIn("Do NOT", content)
+        self.assertIn("script", content.lower())
+
+
+class TestResources(unittest.TestCase):
+    """Test MCP resources functionality."""
+
+    def test_resources_list_returns_all(self):
+        request = {"jsonrpc": "2.0", "id": 1, "method": "resources/list", "params": {}}
+        response = _handle_request(request)
+        resources = response["result"]["resources"]
+        uris = [r["uri"] for r in resources]
+        self.assertIn("trace32://instructions", uris)
+
+    def test_resources_have_required_fields(self):
+        for resource in RESOURCES:
+            self.assertIn("uri", resource)
+            self.assertIn("name", resource)
+            self.assertIn("mimeType", resource)
+
+    def test_all_resources_have_content(self):
+        for resource in RESOURCES:
+            self.assertIn(resource["uri"], _RESOURCE_CONTENTS,
+                          "Resource '{0}' has no content".format(resource["uri"]))
+
+    def test_resources_read_instructions(self):
+        request = {
+            "jsonrpc": "2.0", "id": 1, "method": "resources/read",
+            "params": {"uri": "trace32://instructions"}
+        }
+        response = _handle_request(request)
+        result = response["result"]
+        self.assertIn("contents", result)
+        self.assertIsInstance(result["contents"], list)
+        self.assertGreater(len(result["contents"]), 0)
+        content = result["contents"][0]
+        self.assertEqual(content["uri"], "trace32://instructions")
+        self.assertEqual(content["mimeType"], "text/plain")
+        self.assertIn("CRITICAL RULES", content["text"])
+
+    def test_resources_read_unknown_returns_error(self):
+        request = {
+            "jsonrpc": "2.0", "id": 2, "method": "resources/read",
+            "params": {"uri": "trace32://nonexistent"}
+        }
+        response = _handle_request(request)
+        self.assertIn("error", response)
+        self.assertEqual(response["error"]["code"], -32602)
+
+    def test_instructions_mention_no_scripts(self):
+        """Instructions resource should tell AI to use tools directly."""
+        content = _RESOURCE_CONTENTS["trace32://instructions"]
+        self.assertIn("Do NOT generate Python scripts", content)
+        self.assertIn("Use the MCP tools directly", content)
 
 
 class TestMcpProtocolCompliance(unittest.TestCase):

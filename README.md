@@ -150,7 +150,7 @@ python -m pytest tests/ -v
 python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-Mock UDP 서버를 사용하므로 실제 TRACE32 하드웨어 없이 전체 테스트 가능 (221개 테스트).
+Mock UDP 서버를 사용하므로 실제 TRACE32 하드웨어 없이 전체 테스트 가능 (234개 테스트).
 
 ## 프로토콜 참고
 

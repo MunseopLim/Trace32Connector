@@ -443,6 +443,149 @@ TOOLS = [
 
 
 # ======================================================================
+# Prompts & Resources — guide AI to use MCP tools directly
+# ======================================================================
+
+PROMPTS = [
+    {
+        "name": "trace32-debug-workflow",
+        "description": (
+            "Standard workflow for TRACE32 debugging via MCP tools. "
+            "Use this to understand the correct sequence of tool calls."
+        ),
+        "arguments": []
+    },
+    {
+        "name": "trace32-multicore-workflow",
+        "description": (
+            "Workflow for multi-core debugging with TRACE32. "
+            "Explains how to connect and control multiple cores."
+        ),
+        "arguments": []
+    },
+]
+
+_PROMPT_CONTENTS = {
+    "trace32-debug-workflow": (
+        "# TRACE32 Debugging Workflow\n"
+        "\n"
+        "You have direct access to TRACE32 via MCP tools. "
+        "Do NOT write Python scripts or use the HTTP API. "
+        "Call the MCP tools directly.\n"
+        "\n"
+        "## Step-by-step\n"
+        "1. **Connect**: Call `t32_connect` with host/port to establish a session.\n"
+        "2. **Check state**: Call `t32_get_state` to see if the target is running, stopped, or down.\n"
+        "3. **Load firmware** (if needed): Call `t32_load` with the ELF/binary path.\n"
+        "4. **Set breakpoints**: Call `t32_breakpoint_set` with address or symbol name.\n"
+        "5. **Run target**: Call `t32_go` to start execution.\n"
+        "6. **Inspect**: When stopped, use:\n"
+        "   - `t32_read_register` to read CPU registers (PC, SP, R0, etc.)\n"
+        "   - `t32_read_memory` to read memory regions\n"
+        "   - `t32_read_variable` to read C/C++ variables\n"
+        "   - `t32_eval` to evaluate TRACE32 expressions\n"
+        "7. **Step**: Call `t32_step` for single-stepping.\n"
+        "8. **Execute commands**: Call `t32_cmd` for any PRACTICE command.\n"
+        "9. **Disconnect**: Call `t32_disconnect` when done.\n"
+        "\n"
+        "## Important\n"
+        "- Always call `t32_connect` before any other tool.\n"
+        "- Use `t32_cmd` as a fallback for any TRACE32 command not covered by specific tools.\n"
+        "- Never generate Python/shell scripts to interact with TRACE32. Use the tools directly.\n"
+    ),
+    "trace32-multicore-workflow": (
+        "# TRACE32 Multi-Core Debugging Workflow\n"
+        "\n"
+        "You have direct access to up to 16 TRACE32 cores via MCP tools.\n"
+        "\n"
+        "## Connecting\n"
+        "- **Single core**: `t32_connect` with host, port, core_id\n"
+        "- **All cores at once**: `t32_connect_all` with host, base_port, num_cores\n"
+        "  (connects to consecutive ports: base_port, base_port+1, ...)\n"
+        "\n"
+        "## Managing cores\n"
+        "- `t32_list_cores` — see which cores are connected\n"
+        "- All tools accept `core_id` (0-15, default 0) to target a specific core\n"
+        "- `t32_set_endian` / `t32_get_endian` — per-core endianness\n"
+        "\n"
+        "## Example: Read PC from all 4 cores\n"
+        "Call `t32_read_register` four times with name='PC' and core_id=0,1,2,3.\n"
+        "Do NOT write a loop script. Call the tool directly for each core.\n"
+        "\n"
+        "## Disconnecting\n"
+        "- `t32_disconnect` — single core\n"
+        "- `t32_disconnect_all` — all cores at once\n"
+    ),
+}
+
+RESOURCES = [
+    {
+        "uri": "trace32://instructions",
+        "name": "TRACE32 MCP Usage Instructions",
+        "description": (
+            "How to use the TRACE32 MCP tools. Read this first before "
+            "interacting with TRACE32. Explains available tools and usage rules."
+        ),
+        "mimeType": "text/plain"
+    },
+]
+
+_RESOURCE_CONTENTS = {
+    "trace32://instructions": (
+        "# TRACE32 MCP Server - Usage Instructions\n"
+        "\n"
+        "You are connected to a TRACE32 MCP server that provides direct tool access "
+        "to TRACE32 PowerView debugger instances.\n"
+        "\n"
+        "## CRITICAL RULES\n"
+        "1. **Use the MCP tools directly.** Do NOT generate Python scripts, shell commands, "
+        "or HTTP API calls to interact with TRACE32.\n"
+        "2. **Do NOT import or reference** `t32.client`, `http_server`, or any TRACE32 library. "
+        "The MCP tools handle everything.\n"
+        "3. **Always connect first.** Call `t32_connect` (or `t32_connect_all`) before "
+        "using any other tool.\n"
+        "\n"
+        "## Available Tools (26)\n"
+        "\n"
+        "### Connection\n"
+        "- `t32_connect` — Connect to a TRACE32 instance\n"
+        "- `t32_connect_all` — Connect to multiple cores at once\n"
+        "- `t32_disconnect` / `t32_disconnect_all` — Disconnect\n"
+        "- `t32_list_cores` — List connected cores\n"
+        "\n"
+        "### Configuration\n"
+        "- `t32_set_endian` / `t32_get_endian` — Per-core endianness\n"
+        "\n"
+        "### Execution Control\n"
+        "- `t32_go` — Resume execution\n"
+        "- `t32_break` — Halt execution\n"
+        "- `t32_step` — Single step (with step-over option)\n"
+        "- `t32_get_state` — Get CPU state\n"
+        "\n"
+        "### Memory & Registers\n"
+        "- `t32_read_memory` / `t32_write_memory` — Memory access\n"
+        "- `t32_read_register` / `t32_write_register` — Register access\n"
+        "- `t32_read_variable` / `t32_write_variable` — C/C++ variable access\n"
+        "\n"
+        "### Debug\n"
+        "- `t32_breakpoint_set` / `t32_breakpoint_delete` / `t32_breakpoint_list`\n"
+        "- `t32_get_symbol` — Get symbol address\n"
+        "\n"
+        "### Commands\n"
+        "- `t32_cmd` — Execute any PRACTICE command\n"
+        "- `t32_eval` — Evaluate a TRACE32 expression\n"
+        "- `t32_run_script` — Run a .cmm script\n"
+        "- `t32_load` — Load ELF/binary to target\n"
+        "- `t32_get_version` — Get TRACE32 version\n"
+        "\n"
+        "## Multi-Core\n"
+        "All tools accept `core_id` (0-15, default 0). Each core maps to a separate "
+        "TRACE32 PowerView instance on a different port.\n"
+    ),
+}
+
+
+# ======================================================================
 # Tool Handlers
 # ======================================================================
 
@@ -736,7 +879,9 @@ def _handle_request(request):
         result = {
             "protocolVersion": "2024-11-05",
             "capabilities": {
-                "tools": {}
+                "tools": {},
+                "prompts": {},
+                "resources": {}
             },
             "serverInfo": {
                 "name": "trace32-mcp-server",
@@ -780,10 +925,37 @@ def _handle_request(request):
             })
 
     elif method == "resources/list":
-        return _make_response(req_id, {"resources": []})
+        return _make_response(req_id, {"resources": RESOURCES})
+
+    elif method == "resources/read":
+        uri = params.get("uri", "")
+        content = _RESOURCE_CONTENTS.get(uri)
+        if content is None:
+            return _make_error(req_id, -32602, "Unknown resource: " + uri)
+        return _make_response(req_id, {
+            "contents": [{"uri": uri, "mimeType": "text/plain", "text": content}]
+        })
 
     elif method == "prompts/list":
-        return _make_response(req_id, {"prompts": []})
+        return _make_response(req_id, {"prompts": PROMPTS})
+
+    elif method == "prompts/get":
+        prompt_name = params.get("name", "")
+        content = _PROMPT_CONTENTS.get(prompt_name)
+        if content is None:
+            return _make_error(req_id, -32602, "Unknown prompt: " + prompt_name)
+        # Find description from PROMPTS list
+        description = ""
+        for p in PROMPTS:
+            if p["name"] == prompt_name:
+                description = p.get("description", "")
+                break
+        return _make_response(req_id, {
+            "description": description,
+            "messages": [
+                {"role": "user", "content": {"type": "text", "text": content}}
+            ]
+        })
 
     else:
         return _make_error(req_id, -32601, "Method not found: " + method)
