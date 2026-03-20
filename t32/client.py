@@ -281,7 +281,18 @@ class Trace32Client(object):
             CMD_EXECUTE_PRACTICE, SUBCMD_EXECUTE_PRACTICE, payload)
         self._transmit(msg)
         resp = self._receive()
-        self._check_response(resp)
+        status = resp[1]
+        if status != ERR_OK:
+            # Try to get error details from T32's message area
+            detail = ''
+            try:
+                detail = self.get_message()['text']
+            except Exception:
+                pass
+            err_msg = "Command '{0}' failed".format(command)
+            if detail:
+                err_msg = "{0}: {1}".format(err_msg, detail)
+            raise Trace32Error(err_msg, error_code=status)
         return True
 
     def cmd_with_result(self, command):

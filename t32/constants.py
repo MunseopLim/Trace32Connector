@@ -87,11 +87,11 @@ ACCESS_CLASSES = {
 }
 
 # ============================================================
-# Error Codes
+# Error Codes (T32 server-side status in response byte)
 # ============================================================
 ERR_OK = 0x00
-ERR_RECEIVE = 0x01           # Receive error
-ERR_TRANSMIT = 0x02          # Transmit error
+ERR_CMD_FAIL = 0x01          # PRACTICE command execution failed
+ERR_CMD_ERROR = 0x02         # Command syntax/runtime error
 ERR_ATTACH = 0x03            # Attach error
 ERR_CMD_FAILED = 0x04        # Command execution failed
 ERR_INVALID_STATE = 0x10     # Invalid target state
@@ -99,10 +99,10 @@ ERR_NOT_CONNECTED = 0x20     # Not connected
 
 ERROR_NAMES = {
     ERR_OK: 'OK',
-    ERR_RECEIVE: 'Receive error',
-    ERR_TRANSMIT: 'Transmit error',
+    ERR_CMD_FAIL: 'Command failed (check target state)',
+    ERR_CMD_ERROR: 'Command error (syntax or runtime)',
     ERR_ATTACH: 'Attach error',
-    ERR_CMD_FAILED: 'Command failed',
+    ERR_CMD_FAILED: 'Command execution failed',
     ERR_INVALID_STATE: 'Invalid target state',
     ERR_NOT_CONNECTED: 'Not connected',
 }
