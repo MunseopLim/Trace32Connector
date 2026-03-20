@@ -655,13 +655,29 @@ def _handle_connect(args):
     return result
 
 
-def _handle_connect_all(args):
+def _handle_connect_all(args, progress_token=None):
     host = args.get("host", "localhost")
     base_port = int(args.get("base_port", 20000))
     num_cores = int(args.get("num_cores", 16))
     _send_log("info", "Connecting {0} cores starting at {1}:{2}".format(
         num_cores, host, base_port), logger="trace32.connect")
-    results = _core_manager.connect_all(host, base_port, num_cores)
+    _send_progress(progress_token, 0, total=num_cores,
+                   message="Starting multi-core connect")
+
+    results = []
+    for i in range(num_cores):
+        core_id = i
+        port = base_port + i
+        try:
+            _core_manager.connect_core(core_id, host, port)
+            results.append({"core_id": core_id, "status": "connected",
+                            "host": host, "port": port})
+        except Exception as e:
+            results.append({"core_id": core_id, "status": "failed",
+                            "error": str(e)})
+        _send_progress(progress_token, i + 1, total=num_cores,
+                       message="Connected core {0}/{1}".format(i + 1, num_cores))
+
     connected = sum(1 for r in results if r["status"] == "connected")
     _send_log("info", "Connected {0}/{1} cores".format(connected, num_cores),
               logger="trace32.connect")
@@ -898,6 +914,9 @@ _HANDLERS = {
     "t32_get_version": _handle_get_version,
 }
 
+# Tools that accept progress_token kwarg
+_PROGRESS_HANDLERS = {"t32_connect_all"}
+
 
 # ======================================================================
 # MCP Protocol Handler
@@ -955,6 +974,33 @@ def _send_log(level, message, logger=None, data=None):
         pass
 
 
+def _send_progress(progress_token, progress, total=None, message=None):
+    """Send a progress notification to the MCP client.
+
+    Args:
+        progress_token: Token from the client's _meta.progressToken.
+        progress: Current progress value.
+        total: Optional total value for percentage calculation.
+        message: Optional human-readable status message.
+    """
+    if _notification_sink is None or progress_token is None:
+        return
+    params = {"progressToken": progress_token, "progress": progress}
+    if total is not None:
+        params["total"] = total
+    if message is not None:
+        params["message"] = message
+    notification = {
+        "jsonrpc": "2.0",
+        "method": "notifications/progress",
+        "params": params
+    }
+    try:
+        _notification_sink(notification)
+    except Exception:
+        pass
+
+
 def _handle_request(request):
     """Process a single JSON-RPC request and return a response dict (or None)."""
     method = request.get("method", "")
@@ -990,6 +1036,8 @@ def _handle_request(request):
     elif method == "tools/call":
         tool_name = params.get("name", "")
         tool_args = params.get("arguments", {})
+        meta = tool_args.pop("_meta", params.get("_meta", {})) or {}
+        progress_token = meta.get("progressToken")
 
         handler = _HANDLERS.get(tool_name)
         if handler is None:
@@ -1003,7 +1051,11 @@ def _handle_request(request):
         _send_log("debug", "Calling tool: " + tool_name,
                   logger="trace32.tools", data=tool_args)
         try:
-            result = handler(tool_args)
+            # Pass progress_token to handlers that support it
+            if tool_name in _PROGRESS_HANDLERS:
+                result = handler(tool_args, progress_token=progress_token)
+            else:
+                result = handler(tool_args)
             text = json.dumps(result, indent=2, ensure_ascii=False)
             _send_log("debug", "Tool completed: " + tool_name,
                       logger="trace32.tools")

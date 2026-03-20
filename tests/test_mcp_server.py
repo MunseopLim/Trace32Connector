@@ -19,7 +19,7 @@ from mcp_server import (
     _handle_request, _make_response, _make_error,
     TOOLS, _HANDLERS, PROMPTS, RESOURCES,
     _PROMPT_CONTENTS, _RESOURCE_CONTENTS, _ANNOTATIONS,
-    _send_log, LOG_LEVELS,
+    _send_log, _send_progress, LOG_LEVELS, _PROGRESS_HANDLERS,
 )
 
 
@@ -481,6 +481,99 @@ class TestLogging(unittest.TestCase):
             self.logs.clear()
             _send_log(level, "test")
             self.assertEqual(self.logs[0]["params"]["level"], level)
+
+
+class TestProgress(unittest.TestCase):
+    """Test MCP progress notifications."""
+
+    def setUp(self):
+        self.notifications = []
+        self._orig_sink = mcp_server._notification_sink
+        mcp_server._notification_sink = self.notifications.append
+
+    def tearDown(self):
+        mcp_server._notification_sink = self._orig_sink
+
+    def test_send_progress_basic(self):
+        _send_progress("tok-1", 3, total=10, message="working")
+        self.assertEqual(len(self.notifications), 1)
+        msg = self.notifications[0]
+        self.assertEqual(msg["jsonrpc"], "2.0")
+        self.assertEqual(msg["method"], "notifications/progress")
+        self.assertNotIn("id", msg)
+        p = msg["params"]
+        self.assertEqual(p["progressToken"], "tok-1")
+        self.assertEqual(p["progress"], 3)
+        self.assertEqual(p["total"], 10)
+        self.assertEqual(p["message"], "working")
+
+    def test_send_progress_minimal(self):
+        _send_progress("tok-2", 5)
+        p = self.notifications[0]["params"]
+        self.assertEqual(p["progress"], 5)
+        self.assertNotIn("total", p)
+        self.assertNotIn("message", p)
+
+    def test_send_progress_none_token_does_nothing(self):
+        _send_progress(None, 1, total=10)
+        self.assertEqual(len(self.notifications), 0)
+
+    def test_send_progress_no_sink_does_not_crash(self):
+        mcp_server._notification_sink = None
+        _send_progress("tok-3", 1)
+        # No exception
+
+    def test_progress_handlers_set_exists(self):
+        self.assertIn("t32_connect_all", _PROGRESS_HANDLERS)
+
+    def _mock_connect_all(self, num_cores, progress_token):
+        """Run _handle_connect_all with mocked connect_core to avoid network."""
+        from mcp_server import _handle_connect_all, _core_manager
+        orig = _core_manager.connect_core
+        call_count = [0]
+
+        def fake_connect(core_id, host, port, timeout=None):
+            call_count[0] += 1
+            raise Exception("mock: no T32")
+
+        _core_manager.connect_core = fake_connect
+        try:
+            return _handle_connect_all(
+                {"host": "127.0.0.1", "base_port": 29990,
+                 "num_cores": num_cores},
+                progress_token=progress_token
+            )
+        finally:
+            _core_manager.connect_core = orig
+
+    def test_connect_all_sends_progress_with_token(self):
+        """connect_all with progressToken should emit progress notifications."""
+        self._mock_connect_all(2, "test-tok")
+        progress_msgs = [n for n in self.notifications
+                         if n.get("method") == "notifications/progress"]
+        # Should have initial + per-core progress (0, 1, 2 = 3 messages)
+        self.assertGreaterEqual(len(progress_msgs), 3)
+        tokens = set(n["params"]["progressToken"] for n in progress_msgs)
+        self.assertEqual(tokens, {"test-tok"})
+        # Last progress should show completion
+        last = progress_msgs[-1]["params"]
+        self.assertEqual(last["progress"], 2)
+        self.assertEqual(last["total"], 2)
+
+    def test_connect_all_no_token_no_progress(self):
+        """connect_all without progressToken should not emit progress."""
+        self._mock_connect_all(1, None)
+        progress_msgs = [n for n in self.notifications
+                         if n.get("method") == "notifications/progress"]
+        self.assertEqual(len(progress_msgs), 0)
+
+    def test_meta_progress_token_extracted(self):
+        """_meta.progressToken in arguments should be passed to handler."""
+        self._mock_connect_all(1, "meta-tok")
+        progress_msgs = [n for n in self.notifications
+                         if n.get("method") == "notifications/progress"]
+        self.assertGreater(len(progress_msgs), 0)
+        self.assertEqual(progress_msgs[0]["params"]["progressToken"], "meta-tok")
 
 
 class TestMcpProtocolCompliance(unittest.TestCase):
