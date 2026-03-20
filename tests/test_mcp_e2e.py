@@ -82,11 +82,15 @@ class McpSubprocess(object):
         )
         self._proc.stdin.flush()
 
-        # Read one line of response
-        resp_line = self._proc.stdout.readline()
-        if not resp_line:
-            return None
-        return json.loads(resp_line.decode('utf-8'))
+        # Read lines until we get the actual response (skip notifications)
+        while True:
+            resp_line = self._proc.stdout.readline()
+            if not resp_line:
+                return None
+            parsed = json.loads(resp_line.decode('utf-8'))
+            # Notifications have no 'id'; skip them
+            if 'id' in parsed:
+                return parsed
 
     def call_tool(self, tool_name, arguments=None):
         """Convenience: send a tools/call request.
