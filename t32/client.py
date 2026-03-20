@@ -251,7 +251,7 @@ class Trace32Client(object):
         msg = self._build_msg(CMD_PING, 0)
         self._transmit(msg)
         resp = self._receive()
-        self._check_response(resp, CMD_PING)
+        self._check_response(resp)
         return True
 
     # ------------------------------------------------------------------
@@ -281,7 +281,7 @@ class Trace32Client(object):
             CMD_EXECUTE_PRACTICE, SUBCMD_EXECUTE_PRACTICE, payload)
         self._transmit(msg)
         resp = self._receive()
-        self._check_response(resp, CMD_EXECUTE_PRACTICE)
+        self._check_response(resp)
         return True
 
     def cmd_with_result(self, command):
@@ -325,7 +325,7 @@ class Trace32Client(object):
         msg = self._build_msg(CMD_GETMSG, 0x00)
         self._transmit(msg)
         resp = self._receive()
-        self._check_response(resp, CMD_GETMSG)
+        self._check_response(resp)
 
         mode = 0
         text = ''
@@ -358,7 +358,7 @@ class Trace32Client(object):
         msg = self._build_msg(CMD_DEVICE_SPECIFIC, SUBCMD_GET_STATE)
         self._transmit(msg)
         resp = self._receive()
-        self._check_response(resp, CMD_DEVICE_SPECIFIC)
+        self._check_response(resp)
 
         state_code = resp[3] if len(resp) > 3 else 0xFF
         return {
@@ -434,7 +434,7 @@ class Trace32Client(object):
         msg = self._build_msg(CMD_DEVICE_SPECIFIC, SUBCMD_READ_MEMORY, payload)
         self._transmit(msg)
         resp = self._receive()
-        self._check_response(resp, CMD_DEVICE_SPECIFIC)
+        self._check_response(resp)
 
         return bytes(resp[3:3 + size])
 
@@ -487,7 +487,7 @@ class Trace32Client(object):
             CMD_DEVICE_SPECIFIC, SUBCMD_WRITE_MEMORY, payload, msg_len=10)
         self._transmit(msg)
         resp = self._receive()
-        self._check_response(resp, CMD_DEVICE_SPECIFIC)
+        self._check_response(resp)
         return True
 
     # ------------------------------------------------------------------
@@ -510,7 +510,7 @@ class Trace32Client(object):
         msg = self._build_msg(CMD_DEVICE_SPECIFIC, SUBCMD_READ_REG_BY_NAME, payload)
         self._transmit(msg)
         resp = self._receive()
-        self._check_response(resp, CMD_DEVICE_SPECIFIC)
+        self._check_response(resp)
 
         if len(resp) >= 11:
             value_lo = struct.unpack_from('<I', bytes(resp[3:7]))[0]
@@ -541,7 +541,7 @@ class Trace32Client(object):
         msg = self._build_msg(CMD_DEVICE_SPECIFIC, SUBCMD_READ_PP)
         self._transmit(msg)
         resp = self._receive()
-        self._check_response(resp, CMD_DEVICE_SPECIFIC)
+        self._check_response(resp)
 
         if len(resp) >= 7:
             return struct.unpack_from('<I', bytes(resp[3:7]))[0]
@@ -1091,14 +1091,15 @@ class Trace32Client(object):
     # Internal: response validation
     # ------------------------------------------------------------------
 
-    def _check_response(self, resp, expected_cmd=None):
+    def _check_response(self, resp):
         """Validate a protocol response.
 
-        Response format: [CMD_echo][status][MSGID][payload...]
+        Response format: [header][status][MSGID][payload...]
+        T32 does not echo the CMD byte in responses (verified in hremote.c:
+        all functions only check T32_INBUFFER[2] for status).
 
         Args:
             resp: bytearray response data
-            expected_cmd: Expected command echo byte (optional)
 
         Returns:
             The response bytearray.
@@ -1108,10 +1109,6 @@ class Trace32Client(object):
         """
         if len(resp) < 3:
             raise Trace32Error("Response too short ({0} bytes)".format(len(resp)))
-        if expected_cmd is not None and resp[0] != expected_cmd:
-            raise Trace32Error(
-                "Unexpected response cmd: expected 0x{0:02X}, got 0x{1:02X}".format(
-                    expected_cmd, resp[0]))
         status = resp[1]
         if status != ERR_OK:
             raise Trace32Error("Command failed", error_code=status)
