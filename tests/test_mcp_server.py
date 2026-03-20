@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from mcp_server import (
     _handle_request, _make_response, _make_error,
     TOOLS, _HANDLERS, PROMPTS, RESOURCES,
-    _PROMPT_CONTENTS, _RESOURCE_CONTENTS,
+    _PROMPT_CONTENTS, _RESOURCE_CONTENTS, _ANNOTATIONS,
 )
 
 
@@ -232,6 +232,61 @@ class TestToolSchemas(unittest.TestCase):
                     self.assertIn(req, props,
                                   "Tool '{0}': required field '{1}' not in properties".format(
                                       tool["name"], req))
+
+
+class TestToolAnnotations(unittest.TestCase):
+    """Test MCP tool annotations."""
+
+    def test_all_tools_have_annotations(self):
+        for tool in TOOLS:
+            self.assertIn("annotations", tool,
+                          "Tool '{0}' missing annotations".format(tool["name"]))
+
+    def test_all_annotations_have_required_fields(self):
+        required = ["title", "readOnlyHint", "destructiveHint",
+                     "idempotentHint", "openWorldHint"]
+        for tool in TOOLS:
+            ann = tool.get("annotations", {})
+            for field in required:
+                self.assertIn(field, ann,
+                              "Tool '{0}' annotation missing '{1}'".format(
+                                  tool["name"], field))
+
+    def test_annotations_cover_all_tools(self):
+        for tool in TOOLS:
+            self.assertIn(tool["name"], _ANNOTATIONS)
+
+    def test_read_tools_are_readonly(self):
+        read_tools = ["t32_read_memory", "t32_read_register",
+                      "t32_read_variable", "t32_eval", "t32_get_state",
+                      "t32_get_endian", "t32_get_symbol", "t32_get_version",
+                      "t32_list_cores", "t32_breakpoint_list"]
+        for name in read_tools:
+            ann = _ANNOTATIONS[name]
+            self.assertTrue(ann["readOnlyHint"],
+                            "'{0}' should be readOnly".format(name))
+            self.assertFalse(ann["destructiveHint"],
+                             "'{0}' should not be destructive".format(name))
+
+    def test_write_tools_are_destructive(self):
+        destructive_tools = ["t32_write_memory", "t32_write_register",
+                             "t32_write_variable", "t32_cmd",
+                             "t32_breakpoint_delete", "t32_run_script",
+                             "t32_load"]
+        for name in destructive_tools:
+            ann = _ANNOTATIONS[name]
+            self.assertTrue(ann["destructiveHint"],
+                            "'{0}' should be destructive".format(name))
+            self.assertFalse(ann["readOnlyHint"],
+                             "'{0}' should not be readOnly".format(name))
+
+    def test_annotations_in_tools_list_response(self):
+        request = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+        response = _handle_request(request)
+        tools = response["result"]["tools"]
+        for tool in tools:
+            self.assertIn("annotations", tool)
+            self.assertIn("title", tool["annotations"])
 
 
 class TestPrompts(unittest.TestCase):

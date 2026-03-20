@@ -57,6 +57,40 @@ def _inject_core_id(schema):
     return result
 
 
+# Tool annotations — hints for AI about tool behavior
+# readOnlyHint: tool only reads, no side effects
+# destructiveHint: tool may cause irreversible changes
+# idempotentHint: calling multiple times with same args has same effect
+# openWorldHint: tool interacts with external entities
+_ANNOTATIONS = {
+    "t32_connect":          {"title": "Connect to TRACE32", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    "t32_connect_all":      {"title": "Connect all cores", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    "t32_disconnect":       {"title": "Disconnect core", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    "t32_disconnect_all":   {"title": "Disconnect all cores", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    "t32_list_cores":       {"title": "List connected cores", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    "t32_set_endian":       {"title": "Set endianness", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    "t32_get_endian":       {"title": "Get endianness", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    "t32_cmd":              {"title": "Execute PRACTICE command", "readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": True},
+    "t32_eval":             {"title": "Evaluate expression", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    "t32_get_state":        {"title": "Get CPU state", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    "t32_read_memory":      {"title": "Read memory", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    "t32_write_memory":     {"title": "Write memory", "readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": True},
+    "t32_read_register":    {"title": "Read register", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    "t32_write_register":   {"title": "Write register", "readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": True},
+    "t32_go":               {"title": "Resume execution", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    "t32_break":            {"title": "Halt execution", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    "t32_step":             {"title": "Single step", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
+    "t32_breakpoint_set":   {"title": "Set breakpoint", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    "t32_breakpoint_delete": {"title": "Delete breakpoint", "readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": True},
+    "t32_breakpoint_list":  {"title": "List breakpoints", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    "t32_read_variable":    {"title": "Read variable", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    "t32_write_variable":   {"title": "Write variable", "readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": True},
+    "t32_get_symbol":       {"title": "Get symbol address", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    "t32_run_script":       {"title": "Run PRACTICE script", "readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": True},
+    "t32_load":             {"title": "Load firmware", "readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": True},
+    "t32_get_version":      {"title": "Get TRACE32 version", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+}
+
 TOOLS = [
     {
         "name": "t32_connect",
@@ -440,6 +474,12 @@ TOOLS = [
         "inputSchema": _inject_core_id(None)
     },
 ]
+
+# Inject annotations into each tool definition
+for _tool in TOOLS:
+    _ann = _ANNOTATIONS.get(_tool["name"])
+    if _ann:
+        _tool["annotations"] = _ann
 
 
 # ======================================================================
