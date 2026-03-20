@@ -11,6 +11,8 @@ Compatible with Python 2.7 and 3.4+.
 from __future__ import print_function
 
 import struct
+import sys
+import threading
 
 from .client import Trace32Client, Trace32Error
 from .constants import (
@@ -50,10 +52,13 @@ class CoreManager(object):
     Backward compatible: core_id defaults to 0 everywhere.
     """
 
-    def __init__(self, max_cores=MAX_CORES):
+    def __init__(self, max_cores=MAX_CORES, keepalive_interval=30):
         self._clients = {}      # core_id -> Trace32Client
         self._endianness = {}   # core_id -> 'little' | 'big'
         self._max_cores = max_cores
+        self._keepalive_interval = keepalive_interval
+        self._keepalive_stop = threading.Event()
+        self._keepalive_thread = None
 
     def _validate_core_id(self, core_id):
         """Validate and normalize core_id to int."""
@@ -105,6 +110,7 @@ class CoreManager(object):
         client = Trace32Client()
         client.connect(host=str(host), port=int(port), timeout=timeout)
         self._clients[core_id] = client
+        self._start_keepalive()
         return client
 
     def disconnect_core(self, core_id):
@@ -152,6 +158,7 @@ class CoreManager(object):
 
     def disconnect_all(self):
         """Disconnect all cores."""
+        self._stop_keepalive()
         for core_id in list(self._clients.keys()):
             try:
                 self._clients[core_id].disconnect()
@@ -211,6 +218,43 @@ class CoreManager(object):
                 "endian": self._endianness.get(core_id, ENDIAN_DEFAULT),
             })
         return result
+
+    # ------------------------------------------------------------------
+    # Keepalive
+    # ------------------------------------------------------------------
+
+    def _start_keepalive(self):
+        """Start keepalive thread if not already running."""
+        if self._keepalive_thread is not None:
+            return
+        self._keepalive_stop.clear()
+        t = threading.Thread(target=self._keepalive_loop)
+        t.daemon = True
+        t.start()
+        self._keepalive_thread = t
+
+    def _stop_keepalive(self):
+        """Stop keepalive thread."""
+        if self._keepalive_thread is None:
+            return
+        self._keepalive_stop.set()
+        self._keepalive_thread.join(timeout=5)
+        self._keepalive_thread = None
+
+    def _keepalive_loop(self):
+        """Background loop that pings all connected cores."""
+        while not self._keepalive_stop.wait(self._keepalive_interval):
+            for client in list(self._clients.values()):
+                if self._keepalive_stop.is_set():
+                    return
+                if client.connected:
+                    try:
+                        client.ping()
+                    except Exception:
+                        sys.stderr.write(
+                            "keepalive: ping failed for {0}:{1}\n".format(
+                                client._host, client._port))
+                        sys.stderr.flush()
 
     @property
     def connected_count(self):

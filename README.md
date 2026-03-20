@@ -29,7 +29,8 @@ PACKLEN=1024
 python mcp_server.py
 ```
 
-Claude Code 등에서 MCP 서버로 등록하면 21개 디버깅 도구를 AI가 직접 사용할 수 있습니다.
+Claude Code 등에서 MCP 서버로 등록하면 26개 디버깅 도구를 AI가 직접 사용할 수 있습니다.
+접속 후 30초 간격으로 keepalive ping이 자동 동작하여 idle 시에도 연결이 유지됩니다.
 
 **MCP 설정 예시** (`claude_desktop_config.json` 또는 `.mcp.json`):
 ```json
@@ -113,7 +114,12 @@ client.disconnect()
 | MCP Tool | HTTP Endpoint | 설명 |
 |----------|--------------|------|
 | `t32_connect` | `POST /api/connect` | TRACE32에 연결 |
+| `t32_connect_all` | `POST /api/connect_all` | 멀티코어 일괄 연결 |
 | `t32_disconnect` | `POST /api/disconnect` | 연결 해제 |
+| `t32_disconnect_all` | `POST /api/disconnect_all` | 전체 연결 해제 |
+| `t32_list_cores` | `GET /api/cores` | 접속된 코어 목록 |
+| `t32_set_endian` | `POST /api/endian/set` | 코어별 엔디안 설정 |
+| `t32_get_endian` | `POST /api/endian/get` | 엔디안 조회 |
 | `t32_cmd` | `POST /api/cmd` | PRACTICE 명령 실행 |
 | `t32_eval` | `POST /api/eval` | 수식 평가 후 결과 반환 |
 | `t32_get_state` | `GET /api/state` | 타겟 CPU 상태 조회 |
@@ -137,10 +143,14 @@ client.disconnect()
 ## 테스트
 
 ```bash
+# Python 3.5+ (pytest 지원)
 python -m pytest tests/ -v
+
+# Python 2.7 / 3.4 (pytest 5.0+는 3.4 미지원이므로 unittest 사용)
+python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-Mock TCP 서버를 사용하므로 실제 TRACE32 하드웨어 없이 전체 테스트 가능 (126개 테스트).
+Mock UDP 서버를 사용하므로 실제 TRACE32 하드웨어 없이 전체 테스트 가능 (221개 테스트).
 
 ## 프로토콜 참고
 

@@ -29,6 +29,7 @@ import select
 import socket
 import struct
 import sys
+import threading
 import binascii
 
 from .constants import (
@@ -126,6 +127,7 @@ class Trace32Client(object):
         self._last_transmit_size = 0
         self._receive_toggle_bit = -1
         self._poll_timeout = DEFAULT_TIMEOUT
+        self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Connection management
@@ -212,8 +214,7 @@ class Trace32Client(object):
         # Attach
         try:
             msg = self._build_msg(CMD_ATTACH, device)
-            self._transmit(msg)
-            resp = self._receive()
+            resp = self._exchange(msg)
             if resp[1] != ERR_OK:
                 raise Trace32Error("ATTACH failed", error_code=resp[1])
         except Trace32Error:
@@ -229,14 +230,21 @@ class Trace32Client(object):
 
     def disconnect(self):
         """Disconnect from TRACE32."""
-        if self._sock:
-            try:
-                msg = self._build_msg(CMD_NOP, 0)
-                self._transmit(msg)
-            except Exception:
-                pass
-            self._cleanup_socket()
-        self._connected = False
+        with self._lock:
+            if self._sock:
+                try:
+                    msg = self._build_msg(CMD_NOP, 0)
+                    self._transmit(msg)
+                except Exception:
+                    pass
+                self._cleanup_socket()
+            self._connected = False
+
+    def _exchange(self, msg):
+        """Thread-safe transmit and receive. Used by all protocol methods."""
+        with self._lock:
+            self._transmit(msg)
+            return self._receive()
 
     def ping(self):
         """Ping TRACE32 to check connection is alive.
@@ -249,8 +257,7 @@ class Trace32Client(object):
         """
         self._ensure_connected()
         msg = self._build_msg(CMD_PING, 0)
-        self._transmit(msg)
-        resp = self._receive()
+        resp = self._exchange(msg)
         self._check_response(resp)
         return True
 
@@ -279,8 +286,7 @@ class Trace32Client(object):
         payload = bytearray(cmd_bytes) + bytearray([0x00])  # null-terminated
         msg = self._build_msg(
             CMD_EXECUTE_PRACTICE, SUBCMD_EXECUTE_PRACTICE, payload)
-        self._transmit(msg)
-        resp = self._receive()
+        resp = self._exchange(msg)
         status = resp[1]
         if status != ERR_OK:
             # Try to get error details from T32's message area
@@ -334,8 +340,7 @@ class Trace32Client(object):
         """
         self._ensure_connected()
         msg = self._build_msg(CMD_GETMSG, 0x00)
-        self._transmit(msg)
-        resp = self._receive()
+        resp = self._exchange(msg)
         self._check_response(resp)
 
         mode = 0
@@ -367,8 +372,7 @@ class Trace32Client(object):
         """
         self._ensure_connected()
         msg = self._build_msg(CMD_DEVICE_SPECIFIC, SUBCMD_GET_STATE)
-        self._transmit(msg)
-        resp = self._receive()
+        resp = self._exchange(msg)
         self._check_response(resp)
 
         state_code = resp[3] if len(resp) > 3 else 0xFF
@@ -443,8 +447,7 @@ class Trace32Client(object):
         payload.extend(struct.pack('<H', size))
 
         msg = self._build_msg(CMD_DEVICE_SPECIFIC, SUBCMD_READ_MEMORY, payload)
-        self._transmit(msg)
-        resp = self._receive()
+        resp = self._exchange(msg)
         self._check_response(resp)
 
         return bytes(resp[3:3 + size])
@@ -496,8 +499,7 @@ class Trace32Client(object):
         # LEN byte covers fixed header only (10), not variable data
         msg = self._build_msg(
             CMD_DEVICE_SPECIFIC, SUBCMD_WRITE_MEMORY, payload, msg_len=10)
-        self._transmit(msg)
-        resp = self._receive()
+        resp = self._exchange(msg)
         self._check_response(resp)
         return True
 
@@ -519,8 +521,7 @@ class Trace32Client(object):
         payload = bytearray(name_bytes) + bytearray([0x00])
 
         msg = self._build_msg(CMD_DEVICE_SPECIFIC, SUBCMD_READ_REG_BY_NAME, payload)
-        self._transmit(msg)
-        resp = self._receive()
+        resp = self._exchange(msg)
         self._check_response(resp)
 
         if len(resp) >= 11:
@@ -550,8 +551,7 @@ class Trace32Client(object):
         """
         self._ensure_connected()
         msg = self._build_msg(CMD_DEVICE_SPECIFIC, SUBCMD_READ_PP)
-        self._transmit(msg)
-        resp = self._receive()
+        resp = self._exchange(msg)
         self._check_response(resp)
 
         if len(resp) >= 7:

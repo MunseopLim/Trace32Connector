@@ -13,18 +13,22 @@ TRACE32 PowerView를 AI가 제어할 수 있게 하는 MCP 서버 / HTTP API / P
 - **커밋 금지** — 사용자의 명시적 허락 없이 절대 커밋하지 말 것
 - **유닛 테스트 필수** — 모든 변경점은 관련 유닛 테스트를 수행하여 검증할 것
 - **테스트 추가/수정** — 변경에 대한 유닛 테스트가 없으면 추가하고, 기존 테스트 수정이 필요하면 수정할 것
-- **문서 업데이트** — 코드 변경 시 관련 문서(CLAUDE.md, README 등)도 함께 업데이트할 것
+- **커밋 전 문서 체크리스트** — 사용자가 커밋을 요청하면, 커밋 실행 전에 반드시 아래 항목을 확인하고 업데이트할 것:
+  1. `CLAUDE.md` — 프로젝트 구조, 테스트 수, 프로토콜/기능 설명이 현재 코드와 일치하는지
+  2. `README.md` — 도구 수/목록, 테스트 수, 사용 예시가 현재 코드와 일치하는지
+  3. 새 파일 추가 시 프로젝트 구조 섹션에 반영했는지
 
 ## 프로젝트 구조
 
 ```
 t32/constants.py      — RCL 프로토콜 상수 (CMD, SUBCMD, STATE, ACCESS, NETASSIST 등)
-t32/client.py         — UDP 소켓 기반 TRACE32 클라이언트 (NETASSIST 프로토콜)
-t32/core_manager.py   — 멀티코어 매니저 + 엔디안 설정 + interpret_words()
+t32/client.py         — UDP 소켓 기반 TRACE32 클라이언트 (NETASSIST 프로토콜, 스레드 안전)
+t32/core_manager.py   — 멀티코어 매니저 + 엔디안 설정 + keepalive 스레드
 mcp_server.py         — MCP stdio 서버 (JSON-RPC 2.0, 26개 tools, 멀티코어/엔디안)
 http_server.py        — HTTP REST API 서버 (port 8032, 멀티코어/엔디안)
 config.json           — 기본 설정 (host, port, timeout)
-tests/                — 유닛 테스트 (unittest + mock UDP 서버)
+diag_connect.py       — NETASSIST 프로토콜 진단 스크립트 (실제 T32 디버깅용)
+tests/                — 유닛 테스트 (unittest + mock UDP 서버, 221개)
 ```
 
 ## 멀티코어 지원
@@ -54,9 +58,11 @@ curl -X POST http://localhost:8032/api/register/read \
 ## 테스트
 
 ```bash
+# Python 3.5+
 python -m pytest tests/ -v --tb=short
-# 또는
-python -m unittest discover -s . -p '*test*.py' -v
+
+# Python 2.7 / 3.4 (pytest 5.0+는 3.4 미지원)
+python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
 Mock UDP 서버(`tests/test_client.py:MockTrace32Server`)를 사용하므로 실제 TRACE32 없이 테스트 가능.
@@ -72,6 +78,20 @@ UDP 패킷: `[타입:1][플래그:1][시퀀스:2][데이터]`
 프로토콜 레퍼런스: TRACE32 설치 디렉토리 `~~/demo/api/capi/src/hremote.c`, `hlinknet.c`
 
 **참고**: NETTCP(TCP)는 PowerDebug X50에서만 지원. PowerDebug II/III는 NETASSIST(UDP)만 가능.
+
+## Keepalive / 스레드 안전
+
+- CoreManager가 30초 간격 keepalive 데몬 스레드를 자동 관리 (connect 시 시작, disconnect_all 시 중지)
+- `Trace32Client._exchange()`: `threading.Lock()`으로 transmit+receive를 원자적 보호
+- keepalive ping과 MCP 명령이 동시 실행되어도 프로토콜 충돌 없음
+
+## 진단
+
+실제 T32 접속 문제 디버깅 시 `diag_connect.py` 사용:
+```bash
+python diag_connect.py <host> <port>
+# 각 단계(Connection, Sync, Attach, Ping, Cmd)의 raw 바이트 출력
+```
 
 ## TRACE32 설정
 
