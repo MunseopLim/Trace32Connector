@@ -21,6 +21,8 @@ from mcp_server import (
     _PROMPT_CONTENTS, _RESOURCE_CONTENTS, _ANNOTATIONS,
     _send_log, _send_progress, LOG_LEVELS, _PROGRESS_HANDLERS,
     _resolve_resource_template,
+    _cancel_request, _is_cancelled, _clear_cancelled,
+    _cancelled_requests,
 )
 
 
@@ -622,6 +624,86 @@ class TestProgress(unittest.TestCase):
                          if n.get("method") == "notifications/progress"]
         self.assertGreater(len(progress_msgs), 0)
         self.assertEqual(progress_msgs[0]["params"]["progressToken"], "meta-tok")
+
+
+class TestCancellation(unittest.TestCase):
+    """Test MCP request cancellation."""
+
+    def setUp(self):
+        self.notifications = []
+        self._orig_sink = mcp_server._notification_sink
+        mcp_server._notification_sink = self.notifications.append
+        _cancelled_requests.clear()
+
+    def tearDown(self):
+        mcp_server._notification_sink = self._orig_sink
+        _cancelled_requests.clear()
+
+    def test_cancel_and_check(self):
+        self.assertFalse(_is_cancelled("req-1"))
+        _cancel_request("req-1")
+        self.assertTrue(_is_cancelled("req-1"))
+
+    def test_clear_cancelled(self):
+        _cancel_request("req-2")
+        self.assertTrue(_is_cancelled("req-2"))
+        _clear_cancelled("req-2")
+        self.assertFalse(_is_cancelled("req-2"))
+
+    def test_cancelled_notification_marks_request(self):
+        request = {
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {"requestId": "req-42"}
+        }
+        _handle_request(request)
+        self.assertTrue(_is_cancelled("req-42"))
+
+    def test_cancelled_notification_returns_none(self):
+        request = {
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {"requestId": "req-99"}
+        }
+        result = _handle_request(request)
+        self.assertIsNone(result)
+
+    def test_connect_all_respects_cancellation(self):
+        """connect_all should stop when request is cancelled."""
+        from mcp_server import _handle_connect_all, _core_manager
+        orig = _core_manager.connect_core
+        call_count = [0]
+
+        def fake_connect(core_id, host, port, timeout=None):
+            call_count[0] += 1
+            # Cancel after first core
+            if call_count[0] == 1:
+                _cancel_request("cancel-test")
+            raise Exception("mock")
+
+        _core_manager.connect_core = fake_connect
+        try:
+            result = _handle_connect_all(
+                {"host": "127.0.0.1", "base_port": 29990, "num_cores": 4},
+                request_id="cancel-test"
+            )
+            self.assertTrue(result.get("cancelled", False))
+            # Should have stopped after 1st core (cancelled before 2nd)
+            self.assertLess(len(result["cores"]), 4)
+        finally:
+            _core_manager.connect_core = orig
+
+    def test_cancellation_emits_log(self):
+        request = {
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {"requestId": "log-test"}
+        }
+        _handle_request(request)
+        log_msgs = [n for n in self.notifications
+                    if n.get("method") == "notifications/message"]
+        self.assertTrue(any("cancelled" in l["params"]["message"].lower()
+                            for l in log_msgs))
 
 
 class TestMcpProtocolCompliance(unittest.TestCase):

@@ -28,7 +28,7 @@ mcp_server.py         — MCP stdio 서버 (JSON-RPC 2.0, 26개 tools, prompts/r
 http_server.py        — HTTP REST API 서버 (port 8032, 멀티코어/엔디안)
 config.json           — 기본 설정 (host, port, timeout)
 diag_connect.py       — NETASSIST 프로토콜 진단 스크립트 (실제 T32 디버깅용)
-tests/                — 유닛 테스트 (unittest + mock UDP 서버, 263개)
+tests/                — 유닛 테스트 (unittest + mock UDP 서버, 269개)
 ```
 
 ## 멀티코어 지원

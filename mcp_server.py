@@ -664,7 +664,7 @@ def _handle_connect(args):
     return result
 
 
-def _handle_connect_all(args, progress_token=None):
+def _handle_connect_all(args, progress_token=None, request_id=None):
     host = args.get("host", "localhost")
     base_port = int(args.get("base_port", 20000))
     num_cores = int(args.get("num_cores", 16))
@@ -674,7 +674,13 @@ def _handle_connect_all(args, progress_token=None):
                    message="Starting multi-core connect")
 
     results = []
+    cancelled = False
     for i in range(num_cores):
+        if request_id is not None and _is_cancelled(request_id):
+            _send_log("info", "connect_all cancelled at core {0}/{1}".format(
+                i, num_cores), logger="trace32.cancel")
+            cancelled = True
+            break
         core_id = i
         port = base_port + i
         try:
@@ -690,12 +696,15 @@ def _handle_connect_all(args, progress_token=None):
     connected = sum(1 for r in results if r["status"] == "connected")
     _send_log("info", "Connected {0}/{1} cores".format(connected, num_cores),
               logger="trace32.connect")
-    return {
+    result = {
         "total": num_cores,
         "connected": connected,
         "failed": num_cores - connected,
         "cores": results,
     }
+    if cancelled:
+        result["cancelled"] = True
+    return result
 
 
 def _handle_disconnect(args):
@@ -1011,8 +1020,31 @@ def _send_progress(progress_token, progress, total=None, message=None):
 
 
 import re as _re
+import threading as _threading
 
 _CORE_STATUS_RE = _re.compile(r'^trace32://core/(\d+)/status$')
+
+# Cancellation tracking
+_cancelled_requests = set()
+_cancelled_lock = _threading.Lock()
+
+
+def _cancel_request(request_id):
+    """Mark a request as cancelled."""
+    with _cancelled_lock:
+        _cancelled_requests.add(request_id)
+
+
+def _is_cancelled(request_id):
+    """Check if a request has been cancelled."""
+    with _cancelled_lock:
+        return request_id in _cancelled_requests
+
+
+def _clear_cancelled(request_id):
+    """Remove a request from the cancelled set."""
+    with _cancelled_lock:
+        _cancelled_requests.discard(request_id)
 
 
 def _resolve_resource_template(uri):
@@ -1043,6 +1075,12 @@ def _handle_request(request):
 
     # Notifications (no id) don't get responses
     if req_id is None:
+        if method == "notifications/cancelled":
+            cancelled_id = params.get("requestId")
+            if cancelled_id is not None:
+                _cancel_request(cancelled_id)
+                _send_log("info", "Request {0} cancelled by client".format(
+                    cancelled_id), logger="trace32.cancel")
         return None
 
     if method == "initialize":
@@ -1085,11 +1123,13 @@ def _handle_request(request):
         _send_log("debug", "Calling tool: " + tool_name,
                   logger="trace32.tools", data=tool_args)
         try:
-            # Pass progress_token to handlers that support it
+            # Pass progress_token and request_id to handlers that support it
             if tool_name in _PROGRESS_HANDLERS:
-                result = handler(tool_args, progress_token=progress_token)
+                result = handler(tool_args, progress_token=progress_token,
+                                 request_id=req_id)
             else:
                 result = handler(tool_args)
+            _clear_cancelled(req_id)
             text = json.dumps(result, indent=2, ensure_ascii=False)
             _send_log("debug", "Tool completed: " + tool_name,
                       logger="trace32.tools")
