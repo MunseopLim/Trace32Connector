@@ -20,7 +20,7 @@ from mcp_server import (
     TOOLS, _HANDLERS, PROMPTS, RESOURCES, RESOURCE_TEMPLATES,
     _PROMPT_CONTENTS, _RESOURCE_CONTENTS, _ANNOTATIONS,
     _send_log, _send_progress, LOG_LEVELS, _PROGRESS_HANDLERS,
-    _resolve_resource_template,
+    _resolve_resource_template, _handle_completion,
     _cancel_request, _is_cancelled, _clear_cancelled,
     _cancelled_requests,
 )
@@ -704,6 +704,70 @@ class TestCancellation(unittest.TestCase):
                     if n.get("method") == "notifications/message"]
         self.assertTrue(any("cancelled" in l["params"]["message"].lower()
                             for l in log_msgs))
+
+
+class TestCompletion(unittest.TestCase):
+    """Test MCP completion/complete."""
+
+    def test_complete_prompt_names(self):
+        request = {
+            "jsonrpc": "2.0", "id": 1,
+            "method": "completion/complete",
+            "params": {
+                "ref": {"type": "ref/prompt", "name": "trace32-debug-workflow"},
+                "argument": {"name": "name", "value": "trace32-d"}
+            }
+        }
+        response = _handle_request(request)
+        completion = response["result"]["completion"]
+        self.assertIn("trace32-debug-workflow", completion["values"])
+        self.assertNotIn("trace32-multicore-workflow", completion["values"])
+
+    def test_complete_prompt_names_all(self):
+        result = _handle_completion(
+            {"type": "ref/prompt"}, {"name": "name", "value": "trace32"})
+        self.assertEqual(len(result["values"]), 2)
+
+    def test_complete_resource_core_ids(self):
+        result = _handle_completion(
+            {"type": "ref/resource",
+             "uri": "trace32://core/{core_id}/status"},
+            {"name": "core_id", "value": "1"})
+        self.assertIn("1", result["values"])
+        self.assertIn("10", result["values"])
+        self.assertNotIn("2", result["values"])
+
+    def test_complete_resource_core_ids_empty_prefix(self):
+        result = _handle_completion(
+            {"type": "ref/resource",
+             "uri": "trace32://core/{core_id}/status"},
+            {"name": "core_id", "value": ""})
+        self.assertEqual(len(result["values"]), 16)
+
+    def test_complete_static_resource_uris(self):
+        result = _handle_completion(
+            {"type": "ref/resource", "uri": ""},
+            {"name": "uri", "value": "trace32://inst"})
+        self.assertIn("trace32://instructions", result["values"])
+
+    def test_complete_unknown_ref_type(self):
+        result = _handle_completion(
+            {"type": "ref/unknown"}, {"name": "x", "value": ""})
+        self.assertEqual(result["values"], [])
+        self.assertFalse(result["hasMore"])
+
+    def test_completion_via_handle_request(self):
+        request = {
+            "jsonrpc": "2.0", "id": 1,
+            "method": "completion/complete",
+            "params": {
+                "ref": {"type": "ref/prompt"},
+                "argument": {"name": "name", "value": ""}
+            }
+        }
+        response = _handle_request(request)
+        self.assertIn("completion", response["result"])
+        self.assertIsInstance(response["result"]["completion"]["values"], list)
 
 
 class TestMcpProtocolCompliance(unittest.TestCase):

@@ -1067,6 +1067,43 @@ def _resolve_resource_template(uri):
     return None
 
 
+def _handle_completion(ref, argument):
+    """Handle completion/complete requests.
+
+    Args:
+        ref: Reference object with type and name/uri.
+        argument: Argument object with name and value (partial input).
+
+    Returns:
+        Completion result dict with values list and hasMore/total.
+    """
+    ref_type = ref.get("type", "")
+    value = argument.get("value", "")
+
+    if ref_type == "ref/prompt":
+        # Complete prompt names
+        all_names = [p["name"] for p in PROMPTS]
+        matches = [n for n in all_names if n.startswith(value)]
+        return {"values": matches, "total": len(matches), "hasMore": False}
+
+    elif ref_type == "ref/resource":
+        uri = ref.get("uri", "")
+        # Complete resource template URIs
+        if uri == "trace32://core/{core_id}/status" or \
+                uri.startswith("trace32://core/"):
+            # Suggest core IDs 0-15
+            prefix = value
+            core_ids = [str(i) for i in range(16)]
+            matches = [c for c in core_ids if c.startswith(prefix)]
+            return {"values": matches, "total": len(matches), "hasMore": False}
+        # Complete static resource URIs
+        all_uris = [r["uri"] for r in RESOURCES]
+        matches = [u for u in all_uris if u.startswith(value)]
+        return {"values": matches, "total": len(matches), "hasMore": False}
+
+    return {"values": [], "total": 0, "hasMore": False}
+
+
 def _handle_request(request):
     """Process a single JSON-RPC request and return a response dict (or None)."""
     method = request.get("method", "")
@@ -1191,6 +1228,12 @@ def _handle_request(request):
                 {"role": "user", "content": {"type": "text", "text": content}}
             ]
         })
+
+    elif method == "completion/complete":
+        ref = params.get("ref", {})
+        argument = params.get("argument", {})
+        completions = _handle_completion(ref, argument)
+        return _make_response(req_id, {"completion": completions})
 
     else:
         return _make_error(req_id, -32601, "Method not found: " + method)
