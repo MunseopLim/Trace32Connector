@@ -570,6 +570,15 @@ RESOURCES = [
     },
 ]
 
+RESOURCE_TEMPLATES = [
+    {
+        "uriTemplate": "trace32://core/{core_id}/status",
+        "name": "Core Status",
+        "description": "Get connection status and endianness for a specific core (0-15).",
+        "mimeType": "application/json"
+    },
+]
+
 _RESOURCE_CONTENTS = {
     "trace32://instructions": (
         "# TRACE32 MCP Server - Usage Instructions\n"
@@ -1001,6 +1010,31 @@ def _send_progress(progress_token, progress, total=None, message=None):
         pass
 
 
+import re as _re
+
+_CORE_STATUS_RE = _re.compile(r'^trace32://core/(\d+)/status$')
+
+
+def _resolve_resource_template(uri):
+    """Resolve a dynamic resource URI template. Returns content dict or None."""
+    m = _CORE_STATUS_RE.match(uri)
+    if m:
+        core_id = int(m.group(1))
+        if core_id < 0 or core_id > 15:
+            return None
+        cores = _core_manager.list_cores()
+        core_info = None
+        for c in cores:
+            if c.get("core_id") == core_id:
+                core_info = c
+                break
+        if core_info is None:
+            core_info = {"core_id": core_id, "connected": False}
+        text = json.dumps(core_info, indent=2, ensure_ascii=False)
+        return {"uri": uri, "mimeType": "application/json", "text": text}
+    return None
+
+
 def _handle_request(request):
     """Process a single JSON-RPC request and return a response dict (or None)."""
     method = request.get("method", "")
@@ -1078,16 +1112,24 @@ def _handle_request(request):
             })
 
     elif method == "resources/list":
-        return _make_response(req_id, {"resources": RESOURCES})
+        return _make_response(req_id, {
+            "resources": RESOURCES,
+            "resourceTemplates": RESOURCE_TEMPLATES
+        })
 
     elif method == "resources/read":
         uri = params.get("uri", "")
+        # Static resources
         content = _RESOURCE_CONTENTS.get(uri)
-        if content is None:
-            return _make_error(req_id, -32602, "Unknown resource: " + uri)
-        return _make_response(req_id, {
-            "contents": [{"uri": uri, "mimeType": "text/plain", "text": content}]
-        })
+        if content is not None:
+            return _make_response(req_id, {
+                "contents": [{"uri": uri, "mimeType": "text/plain", "text": content}]
+            })
+        # Dynamic resource templates
+        result = _resolve_resource_template(uri)
+        if result is not None:
+            return _make_response(req_id, {"contents": [result]})
+        return _make_error(req_id, -32602, "Unknown resource: " + uri)
 
     elif method == "prompts/list":
         return _make_response(req_id, {"prompts": PROMPTS})

@@ -17,9 +17,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import mcp_server
 from mcp_server import (
     _handle_request, _make_response, _make_error,
-    TOOLS, _HANDLERS, PROMPTS, RESOURCES,
+    TOOLS, _HANDLERS, PROMPTS, RESOURCES, RESOURCE_TEMPLATES,
     _PROMPT_CONTENTS, _RESOURCE_CONTENTS, _ANNOTATIONS,
     _send_log, _send_progress, LOG_LEVELS, _PROGRESS_HANDLERS,
+    _resolve_resource_template,
 )
 
 
@@ -403,6 +404,53 @@ class TestResources(unittest.TestCase):
         content = _RESOURCE_CONTENTS["trace32://instructions"]
         self.assertIn("Do NOT generate Python scripts", content)
         self.assertIn("Use the MCP tools directly", content)
+
+    def test_resources_list_includes_templates(self):
+        request = {"jsonrpc": "2.0", "id": 1, "method": "resources/list", "params": {}}
+        response = _handle_request(request)
+        result = response["result"]
+        self.assertIn("resourceTemplates", result)
+        templates = result["resourceTemplates"]
+        self.assertIsInstance(templates, list)
+        self.assertGreater(len(templates), 0)
+
+    def test_resource_templates_have_required_fields(self):
+        for tpl in RESOURCE_TEMPLATES:
+            self.assertIn("uriTemplate", tpl)
+            self.assertIn("name", tpl)
+            self.assertIn("mimeType", tpl)
+
+    def test_read_core_status_disconnected(self):
+        request = {
+            "jsonrpc": "2.0", "id": 1, "method": "resources/read",
+            "params": {"uri": "trace32://core/0/status"}
+        }
+        response = _handle_request(request)
+        result = response["result"]
+        self.assertIn("contents", result)
+        content = result["contents"][0]
+        self.assertEqual(content["uri"], "trace32://core/0/status")
+        self.assertEqual(content["mimeType"], "application/json")
+        data = json.loads(content["text"])
+        self.assertEqual(data["core_id"], 0)
+
+    def test_read_core_status_invalid_core_id(self):
+        request = {
+            "jsonrpc": "2.0", "id": 1, "method": "resources/read",
+            "params": {"uri": "trace32://core/99/status"}
+        }
+        response = _handle_request(request)
+        self.assertIn("error", response)
+
+    def test_resolve_template_returns_none_for_unknown(self):
+        self.assertIsNone(_resolve_resource_template("trace32://unknown"))
+
+    def test_resolve_template_core_status(self):
+        result = _resolve_resource_template("trace32://core/5/status")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["mimeType"], "application/json")
+        data = json.loads(result["text"])
+        self.assertIn("core_id", data)
 
 
 class TestLogging(unittest.TestCase):
