@@ -14,10 +14,12 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+import mcp_server
 from mcp_server import (
     _handle_request, _make_response, _make_error,
     TOOLS, _HANDLERS, PROMPTS, RESOURCES,
     _PROMPT_CONTENTS, _RESOURCE_CONTENTS, _ANNOTATIONS,
+    _send_log, LOG_LEVELS,
 )
 
 
@@ -401,6 +403,84 @@ class TestResources(unittest.TestCase):
         content = _RESOURCE_CONTENTS["trace32://instructions"]
         self.assertIn("Do NOT generate Python scripts", content)
         self.assertIn("Use the MCP tools directly", content)
+
+
+class TestLogging(unittest.TestCase):
+    """Test MCP logging (notifications/message)."""
+
+    def setUp(self):
+        self.logs = []
+        self._orig_sink = mcp_server._notification_sink
+        mcp_server._notification_sink = self.logs.append
+
+    def tearDown(self):
+        mcp_server._notification_sink = self._orig_sink
+
+    def test_send_log_emits_notification(self):
+        _send_log("info", "test message")
+        self.assertEqual(len(self.logs), 1)
+        msg = self.logs[0]
+        self.assertEqual(msg["jsonrpc"], "2.0")
+        self.assertEqual(msg["method"], "notifications/message")
+        self.assertNotIn("id", msg)
+        self.assertEqual(msg["params"]["level"], "info")
+        self.assertEqual(msg["params"]["message"], "test message")
+
+    def test_send_log_with_logger_and_data(self):
+        _send_log("debug", "test", logger="mylogger", data={"key": "val"})
+        params = self.logs[0]["params"]
+        self.assertEqual(params["logger"], "mylogger")
+        self.assertEqual(params["data"]["key"], "val")
+
+    def test_send_log_invalid_level_defaults_to_info(self):
+        _send_log("invalid_level", "test")
+        self.assertEqual(self.logs[0]["params"]["level"], "info")
+
+    def test_send_log_no_sink_does_not_crash(self):
+        mcp_server._notification_sink = None
+        _send_log("error", "should not crash")
+        # No exception raised
+
+    def test_tool_call_emits_debug_logs(self):
+        request = {
+            "jsonrpc": "2.0", "id": 1,
+            "method": "tools/call",
+            "params": {"name": "t32_disconnect", "arguments": {}}
+        }
+        _handle_request(request)
+        log_messages = [l["params"]["message"] for l in self.logs]
+        self.assertTrue(any("t32_disconnect" in m for m in log_messages))
+
+    def test_tool_call_error_emits_error_log(self):
+        request = {
+            "jsonrpc": "2.0", "id": 1,
+            "method": "tools/call",
+            "params": {"name": "t32_cmd", "arguments": {"command": "test"}}
+        }
+        _handle_request(request)
+        error_logs = [l for l in self.logs if l["params"]["level"] == "error"]
+        self.assertGreater(len(error_logs), 0)
+
+    def test_unknown_tool_emits_warning(self):
+        request = {
+            "jsonrpc": "2.0", "id": 1,
+            "method": "tools/call",
+            "params": {"name": "nonexistent", "arguments": {}}
+        }
+        _handle_request(request)
+        warnings = [l for l in self.logs if l["params"]["level"] == "warning"]
+        self.assertGreater(len(warnings), 0)
+
+    def test_initialize_has_logging_capability(self):
+        request = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+        response = _handle_request(request)
+        self.assertIn("logging", response["result"]["capabilities"])
+
+    def test_all_log_levels_valid(self):
+        for level in LOG_LEVELS:
+            self.logs.clear()
+            _send_log(level, "test")
+            self.assertEqual(self.logs[0]["params"]["level"], level)
 
 
 class TestMcpProtocolCompliance(unittest.TestCase):

@@ -639,6 +639,8 @@ def _handle_connect(args):
     host = args.get("host", "localhost")
     port = args.get("port", 20000)
     core_id = int(args.get("core_id", 0))
+    _send_log("info", "Connecting to {0}:{1} (core {2})".format(host, port, core_id),
+              logger="trace32.connect")
     client = _core_manager.connect_core(core_id, host, port)
     version = ""
     try:
@@ -648,6 +650,8 @@ def _handle_connect(args):
     result = {"status": "connected", "core_id": core_id, "host": host, "port": port}
     if version:
         result["version"] = version
+    _send_log("info", "Connected to core {0} ({1}:{2})".format(core_id, host, port),
+              logger="trace32.connect")
     return result
 
 
@@ -655,8 +659,12 @@ def _handle_connect_all(args):
     host = args.get("host", "localhost")
     base_port = int(args.get("base_port", 20000))
     num_cores = int(args.get("num_cores", 16))
+    _send_log("info", "Connecting {0} cores starting at {1}:{2}".format(
+        num_cores, host, base_port), logger="trace32.connect")
     results = _core_manager.connect_all(host, base_port, num_cores)
     connected = sum(1 for r in results if r["status"] == "connected")
+    _send_log("info", "Connected {0}/{1} cores".format(connected, num_cores),
+              logger="trace32.connect")
     return {
         "total": num_cores,
         "connected": connected,
@@ -905,6 +913,48 @@ def _make_error(req_id, code, message):
     return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
 
 
+# ======================================================================
+# MCP Logging — notifications/message
+# ======================================================================
+
+# Valid MCP log levels (RFC 5424 subset)
+LOG_LEVELS = ["debug", "info", "notice", "warning", "error", "critical",
+              "alert", "emergency"]
+
+# Output function for sending notifications. Replaced by _write_message
+# in main(), injectable for testing.
+_notification_sink = None
+
+
+def _send_log(level, message, logger=None, data=None):
+    """Send a logging notification to the MCP client.
+
+    Args:
+        level: Log level (debug, info, warning, error, etc.)
+        message: Human-readable log message.
+        logger: Optional logger name (e.g. 'trace32.connect').
+        data: Optional structured data (JSON-serializable).
+    """
+    if _notification_sink is None:
+        return
+    if level not in LOG_LEVELS:
+        level = "info"
+    params = {"level": level, "message": message}
+    if logger is not None:
+        params["logger"] = logger
+    if data is not None:
+        params["data"] = data
+    notification = {
+        "jsonrpc": "2.0",
+        "method": "notifications/message",
+        "params": params
+    }
+    try:
+        _notification_sink(notification)
+    except Exception:
+        pass
+
+
 def _handle_request(request):
     """Process a single JSON-RPC request and return a response dict (or None)."""
     method = request.get("method", "")
@@ -921,7 +971,8 @@ def _handle_request(request):
             "capabilities": {
                 "tools": {},
                 "prompts": {},
-                "resources": {}
+                "resources": {},
+                "logging": {}
             },
             "serverInfo": {
                 "name": "trace32-mcp-server",
@@ -942,23 +993,33 @@ def _handle_request(request):
 
         handler = _HANDLERS.get(tool_name)
         if handler is None:
+            _send_log("warning", "Unknown tool called: " + tool_name,
+                      logger="trace32.tools")
             return _make_response(req_id, {
                 "content": [{"type": "text", "text": "Unknown tool: " + tool_name}],
                 "isError": True
             })
 
+        _send_log("debug", "Calling tool: " + tool_name,
+                  logger="trace32.tools", data=tool_args)
         try:
             result = handler(tool_args)
             text = json.dumps(result, indent=2, ensure_ascii=False)
+            _send_log("debug", "Tool completed: " + tool_name,
+                      logger="trace32.tools")
             return _make_response(req_id, {
                 "content": [{"type": "text", "text": text}]
             })
         except Trace32Error as e:
+            _send_log("error", "TRACE32 error in {0}: {1}".format(
+                tool_name, str(e)), logger="trace32.tools")
             return _make_response(req_id, {
                 "content": [{"type": "text", "text": "TRACE32 Error: " + str(e)}],
                 "isError": True
             })
         except Exception as e:
+            _send_log("error", "Error in {0}: {1}".format(
+                tool_name, str(e)), logger="trace32.tools")
             return _make_response(req_id, {
                 "content": [{"type": "text", "text": "Error: " + str(e)}],
                 "isError": True
@@ -1010,6 +1071,9 @@ def _write_message(msg):
 
 def main():
     """Main MCP server loop. Reads from stdin, writes to stdout."""
+    global _notification_sink
+    _notification_sink = _write_message
+
     sys.stderr.write("TRACE32 MCP Server v1.1.0 started (multi-core support). "
                      "Waiting for requests...\n")
     sys.stderr.flush()
