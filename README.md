@@ -32,6 +32,15 @@ python mcp_server.py
 Claude Code 등에서 MCP 서버로 등록하면 26개 디버깅 도구를 AI가 직접 사용할 수 있습니다.
 접속 후 30초 간격으로 keepalive ping이 자동 동작하여 idle 시에도 연결이 유지됩니다.
 
+**MCP 프로토콜 지원 기능:**
+- Tool annotations (readOnlyHint, destructiveHint) — AI가 tool 위험도 판단
+- Prompts — 디버깅/멀티코어 워크플로우 가이드
+- Resources — 사용 가이드 + 코어별 상태 조회 (resource templates)
+- Logging — tool 실행/에러 로그 실시간 전송
+- Progress — 장시간 작업(connect_all 등) 진행률 보고
+- Cancellation — 진행 중인 작업 취소 지원
+- Completion — prompt/resource 이름 자동완성
+
 **MCP 설정 예시** (`claude_desktop_config.json` 또는 `.mcp.json`):
 ```json
 {
