@@ -89,6 +89,8 @@ _ANNOTATIONS = {
     "t32_run_script":       {"title": "Run PRACTICE script", "readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": True},
     "t32_load":             {"title": "Load firmware", "readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": True},
     "t32_get_version":      {"title": "Get TRACE32 version", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    "t32_memory_dump":      {"title": "Dump memory to file", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    "t32_memory_load":      {"title": "Load file to memory", "readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": True},
 }
 
 TOOLS = [
@@ -473,6 +475,74 @@ TOOLS = [
         "description": "Get TRACE32 PowerView software version.",
         "inputSchema": _inject_core_id(None)
     },
+    {
+        "name": "t32_memory_dump",
+        "description": (
+            "Read target memory and save to a file on the MCP server host. "
+            "Supports binary (raw bytes) and text (T32-style hex dump with addresses and ASCII) formats."
+        ),
+        "inputSchema": _inject_core_id({
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": ["integer", "string"],
+                    "description": "Start address (e.g. 0x1000 or 'D:0x1000')"
+                },
+                "size": {
+                    "type": "integer",
+                    "description": "Number of bytes to dump"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "File path to save on the MCP server host"
+                },
+                "access": {
+                    "type": "string",
+                    "description": "Access class: D, P, SD, SP (default: D)",
+                    "default": "D"
+                },
+                "format": {
+                    "type": "string",
+                    "description": "Output format: 'bin' (raw binary, default) or 'text' (T32-style hex dump with addresses)",
+                    "enum": ["bin", "text"],
+                    "default": "bin"
+                }
+            },
+            "required": ["address", "size", "path"]
+        })
+    },
+    {
+        "name": "t32_memory_load",
+        "description": (
+            "Load a file from the MCP server host and write to target memory. "
+            "Supports binary (raw bytes) and text (T32-style hex dump) formats."
+        ),
+        "inputSchema": _inject_core_id({
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": ["integer", "string"],
+                    "description": "Target start address (e.g. 0x1000 or 'D:0x1000')"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "File path to read from the MCP server host"
+                },
+                "access": {
+                    "type": "string",
+                    "description": "Access class: D, P, SD, SP (default: D)",
+                    "default": "D"
+                },
+                "format": {
+                    "type": "string",
+                    "description": "Input format: 'bin' (raw binary, default) or 'text' (T32-style hex dump)",
+                    "enum": ["bin", "text"],
+                    "default": "bin"
+                }
+            },
+            "required": ["address", "path"]
+        })
+    },
 ]
 
 # Inject annotations into each tool definition
@@ -594,7 +664,7 @@ _RESOURCE_CONTENTS = {
         "3. **Always connect first.** Call `t32_connect` (or `t32_connect_all`) before "
         "using any other tool.\n"
         "\n"
-        "## Available Tools (26)\n"
+        "## Available Tools (28)\n"
         "\n"
         "### Connection\n"
         "- `t32_connect` — Connect to a TRACE32 instance\n"
@@ -625,6 +695,8 @@ _RESOURCE_CONTENTS = {
         "- `t32_eval` — Evaluate a TRACE32 expression\n"
         "- `t32_run_script` — Run a .cmm script\n"
         "- `t32_load` — Load ELF/binary to target\n"
+        "- `t32_memory_dump` — Dump memory to file (binary or T32-style text)\n"
+        "- `t32_memory_load` — Load file to target memory (binary or T32-style text)\n"
         "- `t32_get_version` — Get TRACE32 version\n"
         "\n"
         "## Multi-Core\n"
@@ -902,6 +974,152 @@ def _handle_get_version(args):
     return {"version": version}
 
 
+def _format_hex_dump(data, start_address, access="D", bytes_per_line=16):
+    """Format raw bytes as T32-style hex dump text.
+
+    Output example:
+        D:0x00001000: DE AD BE EF CA FE BA BE 01 02 03 04 05 06 07 08  |........ABCDEFGH|
+    """
+    lines = []
+    for offset in range(0, len(data), bytes_per_line):
+        chunk = data[offset:offset + bytes_per_line]
+        addr = start_address + offset
+        hex_part = " ".join("{0:02X}".format(b if isinstance(b, int) else ord(b))
+                            for b in chunk)
+        # Pad hex part to fixed width
+        hex_width = bytes_per_line * 3 - 1
+        hex_part = hex_part.ljust(hex_width)
+        ascii_part = ""
+        for b in chunk:
+            c = b if isinstance(b, int) else ord(b)
+            ascii_part += chr(c) if 0x20 <= c <= 0x7E else "."
+        lines.append("{0}:0x{1:08X}: {2}  |{3}|".format(
+            access, addr, hex_part, ascii_part))
+    return "\n".join(lines) + "\n"
+
+
+def _parse_hex_dump(text):
+    """Parse T32-style hex dump text back to raw bytes.
+
+    Accepts lines like:
+        D:0x00001000: DE AD BE EF ...  |....|
+    Returns:
+        (start_address, bytes_data) tuple.
+    """
+    result = bytearray()
+    first_addr = None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # Find the address:hex part — skip access prefix
+        colon_idx = line.find(":0x")
+        if colon_idx < 0:
+            continue
+        rest = line[colon_idx + 1:]  # "0x00001000: DE AD ..."
+        parts = rest.split(":", 1)
+        if len(parts) < 2:
+            continue
+        addr_str = parts[0].strip()
+        hex_and_ascii = parts[1].strip()
+        if first_addr is None:
+            first_addr = int(addr_str, 16)
+        # Strip ASCII part (after |)
+        pipe_idx = hex_and_ascii.find("|")
+        if pipe_idx >= 0:
+            hex_and_ascii = hex_and_ascii[:pipe_idx].strip()
+        # Parse hex bytes
+        for token in hex_and_ascii.split():
+            if len(token) == 2:
+                try:
+                    result.append(int(token, 16))
+                except ValueError:
+                    break
+    return (first_addr if first_addr is not None else 0, bytes(result))
+
+
+def _resolve_address(address):
+    """Parse address string, return (int_address, access_prefix_or_None).
+
+    Examples: '0x1000' -> (0x1000, None), 'D:0x1000' -> (0x1000, 'D')
+    """
+    if isinstance(address, int):
+        return address, None
+    addr_str = str(address)
+    access_prefix = None
+    if ":" in addr_str and not addr_str.startswith("0x"):
+        parts = addr_str.split(":", 1)
+        access_prefix = parts[0]
+        addr_str = parts[1]
+    return int(addr_str, 0), access_prefix
+
+
+def _handle_memory_dump(args):
+    client = _get_client(args)
+    core_id = int(args.get("core_id", 0))
+    address = args["address"]
+    size = int(args["size"])
+    path = args["path"]
+    access = args.get("access", "D")
+    fmt = args.get("format", "bin")
+
+    int_addr, addr_access = _resolve_address(address)
+    if addr_access:
+        access = addr_access
+
+    raw_data = client.read_memory(int_addr, size, access)
+
+    if fmt == "text":
+        content = _format_hex_dump(raw_data, int_addr, access)
+        with open(path, "w") as f:
+            f.write(content)
+    else:
+        with open(path, "wb") as f:
+            f.write(raw_data)
+
+    return {
+        "status": "ok",
+        "address": "0x{0:X}".format(int_addr),
+        "size": len(raw_data),
+        "path": path,
+        "format": fmt,
+    }
+
+
+def _handle_memory_load(args):
+    client = _get_client(args)
+    address = args["address"]
+    path = args["path"]
+    access = args.get("access", "D")
+    fmt = args.get("format", "bin")
+
+    int_addr, addr_access = _resolve_address(address)
+    if addr_access:
+        access = addr_access
+
+    if fmt == "text":
+        with open(path, "r") as f:
+            text = f.read()
+        file_addr, data = _parse_hex_dump(text)
+        # Use file's address if user didn't provide explicit address
+        if isinstance(args["address"], str) and args["address"] == "auto":
+            int_addr = file_addr
+    else:
+        with open(path, "rb") as f:
+            data = f.read()
+
+    hex_data = binascii.hexlify(data).decode("ascii")
+    client.write_memory(int_addr, hex_data, access)
+
+    return {
+        "status": "ok",
+        "address": "0x{0:X}".format(int_addr),
+        "bytes_written": len(data),
+        "path": path,
+        "format": fmt,
+    }
+
+
 # Tool name -> handler mapping
 _HANDLERS = {
     "t32_connect": _handle_connect,
@@ -930,6 +1148,8 @@ _HANDLERS = {
     "t32_run_script": _handle_run_script,
     "t32_load": _handle_load,
     "t32_get_version": _handle_get_version,
+    "t32_memory_dump": _handle_memory_dump,
+    "t32_memory_load": _handle_memory_load,
 }
 
 # Tools that accept progress_token kwarg

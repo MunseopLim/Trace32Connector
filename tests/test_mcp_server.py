@@ -14,6 +14,8 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+import tempfile
+
 import mcp_server
 from mcp_server import (
     _handle_request, _make_response, _make_error,
@@ -22,6 +24,7 @@ from mcp_server import (
     _send_log, _send_progress, LOG_LEVELS, _PROGRESS_HANDLERS,
     _resolve_resource_template, _handle_completion,
     _cancel_request, _is_cancelled, _clear_cancelled,
+    _format_hex_dump, _parse_hex_dump, _resolve_address,
     _cancelled_requests,
 )
 
@@ -801,6 +804,139 @@ class TestMcpProtocolCompliance(unittest.TestCase):
         self.assertIsInstance(result["content"], list)
         self.assertGreater(len(result["content"]), 0)
         self.assertEqual(result["content"][0]["type"], "text")
+
+
+class TestMemoryDumpFormat(unittest.TestCase):
+    """Test memory dump/load format functions."""
+
+    def test_format_hex_dump_basic(self):
+        data = b'\xDE\xAD\xBE\xEF'
+        result = _format_hex_dump(data, 0x1000, "D")
+        self.assertIn("D:0x00001000:", result)
+        self.assertIn("DE AD BE EF", result)
+
+    def test_format_hex_dump_ascii(self):
+        data = b'Hello\x00World!'
+        result = _format_hex_dump(data, 0x2000, "D")
+        # Printable chars shown, null as dot
+        self.assertIn("|Hello.World!|", result)
+
+    def test_format_hex_dump_16_bytes_per_line(self):
+        data = bytes(range(32))
+        result = _format_hex_dump(data, 0x0, "D")
+        lines = [l for l in result.strip().splitlines() if l]
+        self.assertEqual(len(lines), 2)
+        self.assertIn("D:0x00000000:", lines[0])
+        self.assertIn("D:0x00000010:", lines[1])
+
+    def test_format_hex_dump_partial_last_line(self):
+        data = bytes(range(20))  # 16 + 4
+        result = _format_hex_dump(data, 0x100, "P")
+        lines = [l for l in result.strip().splitlines() if l]
+        self.assertEqual(len(lines), 2)
+        self.assertIn("P:0x00000100:", lines[0])
+        self.assertIn("P:0x00000110:", lines[1])
+
+    def test_format_hex_dump_access_prefix(self):
+        data = b'\x01'
+        result = _format_hex_dump(data, 0x0, "SD")
+        self.assertTrue(result.startswith("SD:"))
+
+    def test_parse_hex_dump_roundtrip(self):
+        original = b'\xDE\xAD\xBE\xEF\xCA\xFE\xBA\xBE'
+        text = _format_hex_dump(original, 0x1000, "D")
+        addr, parsed = _parse_hex_dump(text)
+        self.assertEqual(addr, 0x1000)
+        self.assertEqual(parsed, original)
+
+    def test_parse_hex_dump_multiline_roundtrip(self):
+        original = bytes(range(48))  # 3 lines of 16
+        text = _format_hex_dump(original, 0x8000, "D")
+        addr, parsed = _parse_hex_dump(text)
+        self.assertEqual(addr, 0x8000)
+        self.assertEqual(parsed, original)
+
+    def test_parse_hex_dump_empty(self):
+        addr, data = _parse_hex_dump("")
+        self.assertEqual(addr, 0)
+        self.assertEqual(data, b"")
+
+    def test_parse_hex_dump_with_access_prefix(self):
+        text = "P:0x00002000: 01 02 03 04  |....|"
+        addr, data = _parse_hex_dump(text)
+        self.assertEqual(addr, 0x2000)
+        self.assertEqual(data, b'\x01\x02\x03\x04')
+
+    def test_resolve_address_integer(self):
+        addr, access = _resolve_address(0x1000)
+        self.assertEqual(addr, 0x1000)
+        self.assertIsNone(access)
+
+    def test_resolve_address_hex_string(self):
+        addr, access = _resolve_address("0x2000")
+        self.assertEqual(addr, 0x2000)
+        self.assertIsNone(access)
+
+    def test_resolve_address_with_access(self):
+        addr, access = _resolve_address("D:0x3000")
+        self.assertEqual(addr, 0x3000)
+        self.assertEqual(access, "D")
+
+    def test_resolve_address_program_access(self):
+        addr, access = _resolve_address("P:0x4000")
+        self.assertEqual(addr, 0x4000)
+        self.assertEqual(access, "P")
+
+    def test_dump_and_load_binary_file(self):
+        """Test dump/load with actual file I/O using binary format."""
+        original = b'\xDE\xAD\xBE\xEF' * 4
+        with tempfile.NamedTemporaryFile(suffix='.bin', delete=False) as f:
+            tmppath = f.name
+
+        try:
+            # Write binary
+            with open(tmppath, 'wb') as f:
+                f.write(original)
+            # Read back
+            with open(tmppath, 'rb') as f:
+                loaded = f.read()
+            self.assertEqual(original, loaded)
+        finally:
+            os.remove(tmppath)
+
+    def test_dump_and_load_text_file(self):
+        """Test dump/load with actual file I/O using text format."""
+        original = bytes(range(32))
+        text = _format_hex_dump(original, 0x1000, "D")
+
+        with tempfile.NamedTemporaryFile(suffix='.txt', mode='w',
+                                         delete=False) as f:
+            tmppath = f.name
+            f.write(text)
+
+        try:
+            with open(tmppath, 'r') as f:
+                loaded_text = f.read()
+            addr, data = _parse_hex_dump(loaded_text)
+            self.assertEqual(addr, 0x1000)
+            self.assertEqual(data, original)
+        finally:
+            os.remove(tmppath)
+
+    def test_tools_include_memory_dump_load(self):
+        tool_names = [t["name"] for t in TOOLS]
+        self.assertIn("t32_memory_dump", tool_names)
+        self.assertIn("t32_memory_load", tool_names)
+
+    def test_handlers_include_memory_dump_load(self):
+        self.assertIn("t32_memory_dump", _HANDLERS)
+        self.assertIn("t32_memory_load", _HANDLERS)
+
+    def test_annotations_include_memory_dump_load(self):
+        self.assertIn("t32_memory_dump", _ANNOTATIONS)
+        self.assertIn("t32_memory_load", _ANNOTATIONS)
+        self.assertFalse(_ANNOTATIONS["t32_memory_dump"]["destructiveHint"])
+        self.assertTrue(_ANNOTATIONS["t32_memory_load"]["destructiveHint"])
 
 
 if __name__ == '__main__':

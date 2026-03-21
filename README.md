@@ -29,7 +29,7 @@ PACKLEN=1024
 python mcp_server.py
 ```
 
-Claude Code 등에서 MCP 서버로 등록하면 26개 디버깅 도구를 AI가 직접 사용할 수 있습니다.
+Claude Code 등에서 MCP 서버로 등록하면 28개 디버깅 도구를 AI가 직접 사용할 수 있습니다.
 접속 후 30초 간격으로 keepalive ping이 자동 동작하여 idle 시에도 연결이 유지됩니다.
 
 **MCP 프로토콜 지원 기능:**
@@ -148,6 +148,8 @@ client.disconnect()
 | `t32_run_script` | `POST /api/script/run` | .cmm 스크립트 실행 |
 | `t32_load` | `POST /api/load` | ELF/바이너리 로드 |
 | `t32_get_version` | `GET /api/version` | TRACE32 버전 조회 |
+| `t32_memory_dump` | — | 메모리 → 파일 저장 (binary/text) |
+| `t32_memory_load` | — | 파일 → 메모리 로드 (binary/text) |
 
 ## 테스트
 
@@ -159,7 +161,7 @@ python -m pytest tests/ -v
 python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-Mock UDP 서버를 사용하므로 실제 TRACE32 하드웨어 없이 전체 테스트 가능 (276개 테스트).
+Mock UDP 서버를 사용하므로 실제 TRACE32 하드웨어 없이 전체 테스트 가능 (294개 테스트).
 
 ## 프로토콜 참고
 
@@ -175,5 +177,5 @@ TRACE32 RCL (Remote Control) NETASSIST 프로토콜 구현 기반:
 
 - [ ] ctypes 기반 t32api.dll 래퍼 (lib/ 디렉토리에 DLL 복사 후 사용)
 - [ ] PRACTICE 스크립트 실행 상태 모니터링 (polling)
-- [ ] 메모리 덤프 파일 저장/로드
+- [x] 메모리 덤프 파일 저장/로드 (`t32_memory_dump` / `t32_memory_load`)
 - [ ] WebSocket 실시간 이벤트 스트리밍
