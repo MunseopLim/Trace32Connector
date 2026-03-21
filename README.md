@@ -151,6 +151,68 @@ client.disconnect()
 | `t32_memory_dump` | — | 메모리 → 파일 저장 (binary/text) |
 | `t32_memory_load` | — | 파일 → 메모리 로드 (binary/text) |
 
+### 메모리 덤프/로드 (`t32_memory_dump` / `t32_memory_load`)
+
+MCP 서버 호스트의 파일시스템에 메모리를 저장하거나 파일에서 메모리로 로드합니다.
+
+**`t32_memory_dump` 파라미터:**
+
+| 파라미터 | 필수 | 설명 |
+|---------|------|------|
+| `address` | O | 시작 주소 (예: `0x1000`, `"D:0x1000"`) |
+| `size` | O | 덤프할 바이트 수 |
+| `path` | O | 저장할 파일 경로 (MCP 서버 호스트) |
+| `access` | | 접근 클래스: `D`, `P`, `SD`, `SP` (기본: `D`) |
+| `format` | | `bin` (raw binary, 기본) 또는 `text` (T32 스타일 hex dump) |
+| `core_id` | | 코어 ID (0-15, 기본: 0) |
+
+**`t32_memory_load` 파라미터:**
+
+| 파라미터 | 필수 | 설명 |
+|---------|------|------|
+| `address` | O | 타겟 시작 주소 |
+| `path` | O | 읽을 파일 경로 (MCP 서버 호스트) |
+| `access` | | 접근 클래스 (기본: `D`) |
+| `format` | | `bin` (기본) 또는 `text` |
+| `core_id` | | 코어 ID (0-15, 기본: 0) |
+
+**text 포맷 출력 예시** (T32 Data.dump 스타일):
+
+```
+D:0x08000000: 00 20 00 20 C1 02 00 08 B5 02 00 08 B7 02 00 08  |. . ............|
+D:0x08000010: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  |................|
+D:0x08000020: 00 00 00 00 00 00 00 00 00 00 00 00 BD 02 00 08  |................|
+```
+
+각 줄은 `[접근클래스:주소]: [16바이트 hex]  |[ASCII]|` 형식입니다.
+- 16바이트 단위로 한 줄 출력
+- ASCII 범위(0x20-0x7E) 외 바이트는 `.`으로 표시
+- 마지막 줄은 16바이트 미만일 수 있음
+
+**MCP 사용 예시:**
+
+```json
+// 메모리 → 바이너리 파일 저장
+{"name": "t32_memory_dump", "arguments": {
+  "address": "0x08000000", "size": 4096, "path": "/tmp/flash.bin"
+}}
+
+// 메모리 → 텍스트 덤프 저장
+{"name": "t32_memory_dump", "arguments": {
+  "address": "D:0x20000000", "size": 256, "path": "/tmp/ram.txt", "format": "text"
+}}
+
+// 바이너리 파일 → 메모리 로드
+{"name": "t32_memory_load", "arguments": {
+  "address": "0x08000000", "path": "/tmp/flash.bin"
+}}
+
+// 텍스트 덤프 → 메모리 로드
+{"name": "t32_memory_load", "arguments": {
+  "address": "0x20000000", "path": "/tmp/ram.txt", "format": "text"
+}}
+```
+
 ## 테스트
 
 ```bash
