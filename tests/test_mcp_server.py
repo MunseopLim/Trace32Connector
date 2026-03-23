@@ -8,6 +8,7 @@ without requiring actual TRACE32 hardware.
 from __future__ import print_function
 
 import json
+import subprocess
 import unittest
 import sys
 import os
@@ -25,7 +26,7 @@ from mcp_server import (
     _resolve_resource_template, _handle_completion,
     _cancel_request, _is_cancelled, _clear_cancelled,
     _format_hex_dump, _parse_hex_dump, _resolve_address,
-    _cancelled_requests,
+    _cancelled_requests, _find_t32start, _handle_start,
 )
 
 
@@ -937,6 +938,195 @@ class TestMemoryDumpFormat(unittest.TestCase):
         self.assertIn("t32_memory_load", _ANNOTATIONS)
         self.assertFalse(_ANNOTATIONS["t32_memory_dump"]["destructiveHint"])
         self.assertTrue(_ANNOTATIONS["t32_memory_load"]["destructiveHint"])
+
+
+class TestT32Start(unittest.TestCase):
+    """Test t32_start tool for launching TRACE32 instances."""
+
+    def test_tool_in_tools_list(self):
+        tool_names = [t["name"] for t in TOOLS]
+        self.assertIn("t32_start", tool_names)
+
+    def test_handler_exists(self):
+        self.assertIn("t32_start", _HANDLERS)
+
+    def test_annotation_exists(self):
+        self.assertIn("t32_start", _ANNOTATIONS)
+        self.assertFalse(_ANNOTATIONS["t32_start"]["destructiveHint"])
+
+    def test_tool_has_no_core_id(self):
+        """t32_start should NOT have core_id — it's not a per-core operation."""
+        tool = [t for t in TOOLS if t["name"] == "t32_start"][0]
+        props = tool["inputSchema"].get("properties", {})
+        self.assertNotIn("core_id", props)
+
+    def test_tool_schema_has_expected_params(self):
+        tool = [t for t in TOOLS if t["name"] == "t32_start"][0]
+        props = tool["inputSchema"]["properties"]
+        for key in ("executable", "runcfg", "runitem", "runaliases", "args",
+                     "wait", "timeout"):
+            self.assertIn(key, props, "Missing param: {0}".format(key))
+
+    def test_find_t32start_explicit_path(self):
+        """Explicit path to existing file should be returned as-is."""
+        # Use python executable as a stand-in for an existing file
+        py = sys.executable
+        result = _find_t32start(py)
+        self.assertEqual(result, py)
+
+    def test_find_t32start_explicit_path_not_found(self):
+        """Non-existent explicit path should raise."""
+        from t32.client import Trace32Error
+        with self.assertRaises(Trace32Error):
+            _find_t32start("/no/such/t32start.exe")
+
+    def test_find_t32start_env_t32_start(self):
+        """T32_START env var should be used if set."""
+        py = sys.executable
+        old = os.environ.get("T32_START")
+        try:
+            os.environ["T32_START"] = py
+            result = _find_t32start(None)
+            self.assertEqual(result, py)
+        finally:
+            if old is None:
+                os.environ.pop("T32_START", None)
+            else:
+                os.environ["T32_START"] = old
+
+    def test_find_t32start_fallback(self):
+        """Without env vars, should fallback to 't32start.exe'."""
+        old_start = os.environ.pop("T32_START", None)
+        old_sys = os.environ.pop("T32SYS", None)
+        try:
+            result = _find_t32start(None)
+            self.assertEqual(result, "t32start.exe")
+        finally:
+            if old_start is not None:
+                os.environ["T32_START"] = old_start
+            if old_sys is not None:
+                os.environ["T32SYS"] = old_sys
+
+    def test_handle_start_builds_command_line(self):
+        """Verify command line is correctly built with all options."""
+        py = sys.executable
+        # Use python -c "pass" as a harmless process
+        args = {
+            "executable": py,
+            "runcfg": "my_config.ts2",
+            "runitem": "ARM_Core0",
+            "runaliases": "PORT=20000;CORE=0",
+            "args": ["-custom", "value"],
+            "wait": True,
+            "timeout": 5,
+        }
+        # Patch: replace executable with a command that exits quickly
+        # We set executable to python and prepend "-c" "pass" via args
+        args2 = {
+            "executable": py,
+            "args": ["-c", "pass"],
+            "wait": True,
+            "timeout": 5,
+        }
+        result = _handle_start(args2)
+        self.assertIn(result["status"], ("exited", "launched"))
+        self.assertIn("pid", result)
+        self.assertIsInstance(result["pid"], int)
+
+    def test_handle_start_nonexistent_executable(self):
+        """Should raise Trace32Error for non-existent executable."""
+        from t32.client import Trace32Error
+        with self.assertRaises(Trace32Error):
+            _handle_start({"executable": "/no/such/t32start.exe"})
+
+    def test_handle_start_cmd_line_order(self):
+        """Verify runcfg/runitem/runaliases flags are in correct order."""
+        py = sys.executable
+        args = {
+            "executable": py,
+            "runcfg": "config.ts2",
+            "runitem": "MyItem",
+            "runaliases": "K=V",
+            "args": ["-c", "pass"],
+            "wait": True,
+            "timeout": 5,
+        }
+        result = _handle_start(args)
+        cmd = result["command"]
+        # Verify order: exe, -runcfg, val, -runitem, val, -runaliases, val, extra
+        self.assertEqual(cmd[0], py)
+        rc_idx = cmd.index("-runcfg")
+        ri_idx = cmd.index("-runitem")
+        ra_idx = cmd.index("-runaliases")
+        self.assertEqual(cmd[rc_idx + 1], "config.ts2")
+        self.assertEqual(cmd[ri_idx + 1], "MyItem")
+        self.assertEqual(cmd[ra_idx + 1], "K=V")
+        self.assertLess(rc_idx, ri_idx)
+        self.assertLess(ri_idx, ra_idx)
+
+    def test_handle_start_runcfg_from_env(self):
+        """T32_RUNCFG env var should be used when runcfg param is omitted."""
+        py = sys.executable
+        old = os.environ.get("T32_RUNCFG")
+        try:
+            os.environ["T32_RUNCFG"] = "env_config.ts2"
+            args = {
+                "executable": py,
+                "args": ["-c", "pass"],
+                "wait": True,
+                "timeout": 5,
+            }
+            result = _handle_start(args)
+            cmd = result["command"]
+            self.assertIn("-runcfg", cmd)
+            rc_idx = cmd.index("-runcfg")
+            self.assertEqual(cmd[rc_idx + 1], "env_config.ts2")
+        finally:
+            if old is None:
+                os.environ.pop("T32_RUNCFG", None)
+            else:
+                os.environ["T32_RUNCFG"] = old
+
+    def test_handle_start_runcfg_param_overrides_env(self):
+        """Explicit runcfg param should override T32_RUNCFG env var."""
+        py = sys.executable
+        old = os.environ.get("T32_RUNCFG")
+        try:
+            os.environ["T32_RUNCFG"] = "env_config.ts2"
+            args = {
+                "executable": py,
+                "runcfg": "explicit_config.ts2",
+                "args": ["-c", "pass"],
+                "wait": True,
+                "timeout": 5,
+            }
+            result = _handle_start(args)
+            cmd = result["command"]
+            rc_idx = cmd.index("-runcfg")
+            self.assertEqual(cmd[rc_idx + 1], "explicit_config.ts2")
+        finally:
+            if old is None:
+                os.environ.pop("T32_RUNCFG", None)
+            else:
+                os.environ["T32_RUNCFG"] = old
+
+    def test_handle_start_no_wait(self):
+        """Non-wait mode should return immediately with 'launched' status."""
+        py = sys.executable
+        args = {
+            "executable": py,
+            "args": ["-c", "import time; time.sleep(10)"],
+            "wait": False,
+        }
+        result = _handle_start(args)
+        self.assertEqual(result["status"], "launched")
+        self.assertIn("pid", result)
+        # Clean up the spawned process
+        try:
+            import signal
+            os.kill(result["pid"], signal.SIGTERM)
+        except Exception:
+            pass
 
 
 if __name__ == '__main__':

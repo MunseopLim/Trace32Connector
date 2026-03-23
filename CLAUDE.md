@@ -24,11 +24,11 @@ TRACE32 PowerView를 AI가 제어할 수 있게 하는 MCP 서버 / HTTP API / P
 t32/constants.py      — RCL 프로토콜 상수 (CMD, SUBCMD, STATE, ACCESS, NETASSIST 등)
 t32/client.py         — UDP 소켓 기반 TRACE32 클라이언트 (NETASSIST 프로토콜, 스레드 안전)
 t32/core_manager.py   — 멀티코어 매니저 + 엔디안 설정 + keepalive 스레드
-mcp_server.py         — MCP stdio 서버 (JSON-RPC 2.0, 28개 tools, prompts/resources/completion, logging/progress/cancellation, 멀티코어/엔디안)
+mcp_server.py         — MCP stdio 서버 (JSON-RPC 2.0, 29개 tools, prompts/resources/completion, logging/progress/cancellation, 멀티코어/엔디안)
 http_server.py        — HTTP REST API 서버 (port 8032, 멀티코어/엔디안)
 config.json           — 기본 설정 (host, port, timeout)
 diag_connect.py       — NETASSIST 프로토콜 진단 스크립트 (실제 T32 디버깅용)
-tests/                — 유닛 테스트 (unittest + mock UDP 서버, 298개)
+tests/                — 유닛 테스트 (unittest + mock UDP 서버, 313개)
 ```
 
 ## 멀티코어 지원

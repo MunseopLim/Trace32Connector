@@ -17,8 +17,10 @@ from __future__ import print_function
 
 import binascii
 import json
+import subprocess
 import sys
 import os
+import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -91,6 +93,7 @@ _ANNOTATIONS = {
     "t32_get_version":      {"title": "Get TRACE32 version", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
     "t32_memory_dump":      {"title": "Dump memory to file", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
     "t32_memory_load":      {"title": "Load file to memory", "readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": True},
+    "t32_start":            {"title": "Launch TRACE32 instance", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
 }
 
 TOOLS = [
@@ -551,6 +554,66 @@ TOOLS = [
             },
             "required": ["address", "path"]
         })
+    },
+    {
+        "name": "t32_start",
+        "description": (
+            "Launch a TRACE32 PowerView instance using t32start.exe. "
+            "Starts a new T32 window with the specified configuration. "
+            "After launch, use t32_connect to connect to it. "
+            "The executable path can be given explicitly, or is auto-detected from "
+            "T32_START or T32SYS environment variables, or system PATH."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "executable": {
+                    "type": "string",
+                    "description": (
+                        "Path to t32start.exe. Optional if T32_START or T32SYS "
+                        "environment variable is set, or t32start.exe is in PATH."
+                    )
+                },
+                "runcfg": {
+                    "type": "string",
+                    "description": (
+                        "Path to .ts2 configuration file (-runcfg). "
+                        "Optional if T32_RUNCFG environment variable is set."
+                    )
+                },
+                "runitem": {
+                    "type": "string",
+                    "description": (
+                        "Configuration item name to launch from the .ts2 file (-runitem)"
+                    )
+                },
+                "runaliases": {
+                    "type": "string",
+                    "description": (
+                        "Alias definitions, semicolon-separated key=value pairs (-runaliases). "
+                        "Example: 'CORE=0;PORT=20000'"
+                    )
+                },
+                "args": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Additional command-line arguments as a list. "
+                        "Each flag and its value should be separate elements. "
+                        "Example: ['-flag1', 'value1', '-flag2', 'value2']"
+                    )
+                },
+                "wait": {
+                    "type": "boolean",
+                    "description": "Wait for t32start.exe to finish (default: false)"
+                },
+                "timeout": {
+                    "type": "number",
+                    "description": "Timeout in seconds when wait=true (default: 30)"
+                }
+            },
+            "required": []
+        }
     },
 ]
 
@@ -1129,6 +1192,91 @@ def _handle_memory_load(args):
     }
 
 
+def _find_t32start(explicit_path=None):
+    """Locate t32start.exe: explicit path > T32_START env > T32SYS env > PATH."""
+    if explicit_path:
+        if os.path.isfile(explicit_path):
+            return explicit_path
+        raise Trace32Error(
+            "t32start executable not found: {0}".format(explicit_path))
+
+    # Environment variable: T32_START (direct path to executable)
+    env_start = os.environ.get("T32_START", "")
+    if env_start and os.path.isfile(env_start):
+        return env_start
+
+    # Environment variable: T32SYS (TRACE32 installation directory)
+    t32sys = os.environ.get("T32SYS", "")
+    if t32sys:
+        for subdir in ("bin/windows64", "bin/windows", "bin"):
+            candidate = os.path.join(t32sys, subdir, "t32start.exe")
+            if os.path.isfile(candidate):
+                return candidate
+
+    # Fallback: assume it's on PATH
+    return "t32start.exe"
+
+
+def _handle_start(args):
+    executable = _find_t32start(args.get("executable"))
+
+    cmd_line = [executable]
+
+    # runcfg: parameter > T32_RUNCFG env
+    runcfg = args.get("runcfg") or os.environ.get("T32_RUNCFG", "")
+
+    # Named options: -flag value
+    for flag, val in (("-runcfg", runcfg),
+                      ("-runitem", args.get("runitem")),
+                      ("-runaliases", args.get("runaliases"))):
+        if val:
+            cmd_line.extend([flag, val])
+
+    # Additional arbitrary arguments
+    extra = args.get("args")
+    if extra:
+        cmd_line.extend(extra)
+
+    wait = args.get("wait", False)
+    timeout = float(args.get("timeout", 30))
+
+    try:
+        proc = subprocess.Popen(
+            cmd_line,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError as e:
+        raise Trace32Error(
+            "Failed to launch t32start: {0}".format(e))
+
+    result = {
+        "status": "launched",
+        "pid": proc.pid,
+        "command": cmd_line,
+    }
+
+    if wait:
+        deadline = time.time() + timeout
+        while proc.poll() is None and time.time() < deadline:
+            time.sleep(0.5)
+        if proc.poll() is None:
+            result["status"] = "timeout"
+            result["message"] = (
+                "t32start still running after {0}s".format(int(timeout)))
+        else:
+            result["status"] = "exited"
+            result["returncode"] = proc.returncode
+            stdout = proc.stdout.read().decode("ascii", errors="replace").strip()
+            stderr = proc.stderr.read().decode("ascii", errors="replace").strip()
+            if stdout:
+                result["stdout"] = stdout
+            if stderr:
+                result["stderr"] = stderr
+
+    return result
+
+
 # Tool name -> handler mapping
 _HANDLERS = {
     "t32_connect": _handle_connect,
@@ -1159,6 +1307,7 @@ _HANDLERS = {
     "t32_get_version": _handle_get_version,
     "t32_memory_dump": _handle_memory_dump,
     "t32_memory_load": _handle_memory_load,
+    "t32_start": _handle_start,
 }
 
 # Tools that accept progress_token kwarg

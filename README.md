@@ -29,7 +29,7 @@ PACKLEN=1024
 python mcp_server.py
 ```
 
-Claude Code 등에서 MCP 서버로 등록하면 28개 디버깅 도구를 AI가 직접 사용할 수 있습니다.
+Claude Code 등에서 MCP 서버로 등록하면 29개 디버깅 도구를 AI가 직접 사용할 수 있습니다.
 접속 후 30초 간격으로 keepalive ping이 자동 동작하여 idle 시에도 연결이 유지됩니다.
 
 **MCP 프로토콜 지원 기능:**
@@ -150,6 +150,7 @@ client.disconnect()
 | `t32_get_version` | `GET /api/version` | TRACE32 버전 조회 |
 | `t32_memory_dump` | — | 메모리 → 파일 저장 (binary/text) |
 | `t32_memory_load` | — | 파일 → 메모리 로드 (binary/text) |
+| `t32_start` | — | t32start.exe로 PowerView 인스턴스 실행 |
 
 ### 메모리 덤프/로드 (`t32_memory_dump` / `t32_memory_load`)
 
@@ -223,7 +224,7 @@ python -m pytest tests/ -v
 python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-Mock UDP 서버를 사용하므로 실제 TRACE32 하드웨어 없이 전체 테스트 가능 (298개 테스트).
+Mock UDP 서버를 사용하므로 실제 TRACE32 하드웨어 없이 전체 테스트 가능 (313개 테스트).
 
 ## 프로토콜 참고
 
