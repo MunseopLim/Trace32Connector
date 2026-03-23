@@ -23,6 +23,7 @@ from t32.constants import (
     CMD_DEVICE_SPECIFIC, CMD_GETMSG,
     SUBCMD_GET_STATE, SUBCMD_READ_MEMORY, SUBCMD_WRITE_MEMORY,
     SUBCMD_READ_REG_BY_NAME, SUBCMD_READ_PP,
+    SUBCMD_EVAL_GET, SUBCMD_EVAL_GET_STRING,
     DEV_ICD, ERR_OK,
     STATE_STOPPED, STATE_RUNNING,
     T32_API_CONNECT, T32_API_CONNECT_OK,
@@ -254,6 +255,29 @@ class MockTrace32Server(object):
                     self._memory[addr + i] = data[i]
             return self._build_response(
                 CMD_DEVICE_SPECIFIC, ERR_OK, msgid)
+
+        elif subcmd == SUBCMD_EVAL_GET_STRING:
+            resp_payload = bytearray()
+            resp_payload.extend(_to_bytes(self._last_message))
+            resp_payload.append(0x00)
+            return self._build_response(
+                CMD_DEVICE_SPECIFIC, ERR_OK, msgid, resp_payload)
+
+        elif subcmd == SUBCMD_EVAL_GET:
+            # Return numeric value (parse from _last_message if hex)
+            val = 0
+            msg = self._last_message.strip()
+            if msg:
+                try:
+                    if msg.startswith('0x') or msg.startswith('0X'):
+                        val = int(msg, 16)
+                    else:
+                        val = int(msg)
+                except (ValueError, OverflowError):
+                    val = 0
+            resp_payload = bytearray(struct.pack('<I', val & 0xFFFFFFFF))
+            return self._build_response(
+                CMD_DEVICE_SPECIFIC, ERR_OK, msgid, resp_payload)
 
         return self._build_response(CMD_DEVICE_SPECIFIC, ERR_OK, msgid)
 
@@ -517,6 +541,26 @@ class TestClientWithMockServer(unittest.TestCase):
     def test_eval_expression(self):
         result = self.client.eval_expression("VERSION.SOFTWARE()")
         self.assertEqual(result, "TRACE32 Mock Server")
+
+    def test_eval_expression_var_value(self):
+        result = self.client.eval_expression("Var.VALUE(myVar)")
+        self.assertEqual(result, "42")
+
+    def test_eval_get_string(self):
+        self.client.cmd("PRINT VERSION.SOFTWARE()")
+        result = self.client.eval_get_string()
+        self.assertEqual(result, "TRACE32 Mock Server")
+
+    def test_eval_get_string_empty(self):
+        result = self.client.eval_get_string()
+        self.assertEqual(result, "")
+
+    def test_eval_get(self):
+        self.client.cmd("PRINT Register(PC)")
+        self.server.set_register('PC', 0x08001234)
+        self.client.cmd("PRINT 0x08001234")
+        result = self.client.eval_get()
+        self.assertEqual(result, 0x08001234)
 
     def test_get_message(self):
         self.client.cmd("PRINT VERSION.SOFTWARE()")

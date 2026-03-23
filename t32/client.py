@@ -37,7 +37,7 @@ from .constants import (
     CMD_DEVICE_SPECIFIC, CMD_GETMSG, CMD_TERMINATE,
     SUBCMD_GET_STATE, SUBCMD_READ_PP, SUBCMD_READ_REG_BY_NAME,
     SUBCMD_WRITE_REG_BY_NAME, SUBCMD_READ_MEMORY, SUBCMD_WRITE_MEMORY,
-    SUBCMD_EXECUTE_PRACTICE,
+    SUBCMD_EXECUTE_PRACTICE, SUBCMD_EVAL_GET, SUBCMD_EVAL_GET_STRING,
     DEV_ICD,
     STATE_NAMES,
     ACCESS_CLASSES, ACCESS_DATA,
@@ -319,8 +319,9 @@ class Trace32Client(object):
     def eval_expression(self, expression):
         """Evaluate a TRACE32 expression and return the text result.
 
-        Uses PRINT to output the expression result to the AREA window,
-        then retrieves it.
+        Sends ``PRINT <expression>`` then retrieves the result via the
+        dedicated EVAL_GET_STRING protocol command (SUBCMD 0x0F), which
+        reads from the eval-result buffer — not the message line.
 
         Args:
             expression: TRACE32 expression (e.g. "Register(PC)",
@@ -330,7 +331,50 @@ class Trace32Client(object):
             Result as a string.
         """
         self.cmd("PRINT " + (expression if isinstance(expression, str) else expression.decode('ascii')))
-        return self.get_message()['text']
+        return self.eval_get_string()
+
+    def eval_get_string(self):
+        """Retrieve the string result of the last evaluated expression.
+
+        Uses CMD_DEVICE_SPECIFIC + SUBCMD_EVAL_GET_STRING (0x0F),
+        which corresponds to T32_EvalGetString() in the C API.
+
+        Returns:
+            Result as a string.
+        """
+        self._ensure_connected()
+        msg = self._build_msg(CMD_DEVICE_SPECIFIC, SUBCMD_EVAL_GET_STRING)
+        resp = self._exchange(msg)
+        self._check_response(resp)
+
+        text = ''
+        if len(resp) > 3:
+            text_data = resp[3:]
+            null_pos = len(text_data)
+            for i in range(len(text_data)):
+                if text_data[i] == 0:
+                    null_pos = i
+                    break
+            text = bytes(text_data[:null_pos]).decode('ascii', errors='replace')
+        return text
+
+    def eval_get(self):
+        """Retrieve the numeric (uint32) result of the last evaluated expression.
+
+        Uses CMD_DEVICE_SPECIFIC + SUBCMD_EVAL_GET (0x0E),
+        which corresponds to T32_EvalGet() in the C API.
+
+        Returns:
+            Integer value.
+        """
+        self._ensure_connected()
+        msg = self._build_msg(CMD_DEVICE_SPECIFIC, SUBCMD_EVAL_GET)
+        resp = self._exchange(msg)
+        self._check_response(resp)
+
+        if len(resp) >= 7:
+            return struct.unpack_from('<I', bytes(resp[3:7]))[0]
+        return 0
 
     def get_message(self):
         """Get the last message from the TRACE32 AREA window.

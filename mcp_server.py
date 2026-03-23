@@ -189,8 +189,11 @@ TOOLS = [
     {
         "name": "t32_cmd",
         "description": (
-            "Execute any TRACE32 PRACTICE command. This is the most versatile tool. "
+            "Execute any TRACE32 PRACTICE command. "
             "Any command you can type in the TRACE32 command line works here. "
+            "NOTE: This tool does NOT return any result text — it only reports success/failure. "
+            "To READ a value, use t32_eval (expressions), t32_read_variable (C/C++ variables), "
+            "or t32_read_register (registers) instead. "
             "Examples: 'SYStem.Up', 'Break.Set main', 'Data.dump 0x0--0xFF', "
             "'Var.Watch myVar', 'Register.view'"
         ),
@@ -389,7 +392,13 @@ TOOLS = [
     },
     {
         "name": "t32_read_variable",
-        "description": "Read a C/C++ variable value from the target.",
+        "description": (
+            "Read a C/C++ variable value from the target. "
+            "Use this tool to get the current value of any symbol, global variable, "
+            "local variable, or struct field. Supports pointer dereference (*ptr) "
+            "and nested access (myStruct.field). "
+            "Internally uses Var.VALUE() via the TRACE32 eval protocol."
+        ),
         "inputSchema": _inject_core_id({
             "type": "object",
             "properties": {
