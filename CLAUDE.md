@@ -24,11 +24,11 @@ TRACE32 PowerView를 AI가 제어할 수 있게 하는 MCP 서버 / HTTP API / P
 t32/constants.py      — RCL 프로토콜 상수 (CMD, SUBCMD, STATE, ACCESS, NETASSIST 등)
 t32/client.py         — UDP 소켓 기반 TRACE32 클라이언트 (NETASSIST 프로토콜, 스레드 안전)
 t32/core_manager.py   — 멀티코어 매니저 + 엔디안 설정 + keepalive 스레드
-mcp_server.py         — MCP stdio 서버 (JSON-RPC 2.0, 29개 tools, prompts/resources/completion, logging/progress/cancellation, 멀티코어/엔디안)
+mcp_server.py         — MCP stdio 서버 (JSON-RPC 2.0, 36개 tools, prompts/resources/completion, logging/progress/cancellation, 멀티코어/엔디안)
 http_server.py        — HTTP REST API 서버 (port 8032, 멀티코어/엔디안)
 config.json           — 기본 설정 (host, port, timeout)
 diag_connect.py       — NETASSIST 프로토콜 진단 스크립트 (실제 T32 디버깅용)
-tests/                — 유닛 테스트 (unittest + mock UDP 서버, 313개)
+tests/                — 유닛 테스트 (unittest + mock UDP 서버, 340개)
 ```
 
 ## 멀티코어 지원
@@ -83,7 +83,7 @@ UDP 패킷: `[타입:1][플래그:1][시퀀스:2][데이터]`
 
 MCP 서버는 다음 MCP 프로토콜 기능을 지원:
 
-- **Tools** (26개) — TRACE32 디버깅 전체 기능, tool annotations (readOnlyHint, destructiveHint 등) 포함
+- **Tools** (36개) — TRACE32 디버깅 전체 기능, tool annotations (readOnlyHint, destructiveHint 등) 포함
 - **Prompts** (2개) — `trace32-debug-workflow`, `trace32-multicore-workflow` (AI가 스크립트 대신 tool 직접 사용하도록 유도)
 - **Resources** — 정적 (`trace32://instructions`) + 동적 resource templates (`trace32://core/{core_id}/status`)
 - **Logging** — `notifications/message`로 tool 실행/에러 로그를 클라이언트에 실시간 전송

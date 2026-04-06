@@ -318,6 +318,40 @@ def _api_ping(body):
     return {"status": "ok"}
 
 
+def _api_get_cpu(body):
+    client = _get_client(body)
+    cpu = client.get_cpu()
+    return {"cpu": cpu}
+
+
+def _api_reset(body):
+    client = _get_client(body)
+    client.reset_target()
+    return {"status": "ok", "action": "target reset"}
+
+
+def _api_system_up(body):
+    client = _get_client(body)
+    client.system_up()
+    return {"status": "ok", "action": "system up"}
+
+
+def _api_system_down(body):
+    client = _get_client(body)
+    client.system_down()
+    return {"status": "ok", "action": "system down"}
+
+
+def _api_get_practice_state(body):
+    client = _get_client(body)
+    return client.get_practice_state()
+
+
+def _api_get_message(body):
+    client = _get_client(body)
+    return client.get_message()
+
+
 # POST routes
 _POST_ROUTES = {
     '/api/connect': _api_connect,
@@ -341,6 +375,9 @@ _POST_ROUTES = {
     '/api/symbol': _api_symbol,
     '/api/script/run': _api_script_run,
     '/api/load': _api_load,
+    '/api/reset': _api_reset,
+    '/api/system/up': _api_system_up,
+    '/api/system/down': _api_system_down,
 }
 
 # GET routes
@@ -351,6 +388,9 @@ _GET_ROUTES = {
     '/api/ping': _api_ping,
     '/api/cores': _api_cores,
     '/api/endian': _api_endian_get,
+    '/api/cpu': _api_get_cpu,
+    '/api/practice/state': _api_get_practice_state,
+    '/api/message': _api_get_message,
 }
 
 

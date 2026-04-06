@@ -94,6 +94,13 @@ _ANNOTATIONS = {
     "t32_memory_dump":      {"title": "Dump memory to file", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
     "t32_memory_load":      {"title": "Load file to memory", "readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": True},
     "t32_start":            {"title": "Launch TRACE32 instance", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
+    "t32_ping":             {"title": "Ping TRACE32", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    "t32_get_cpu":          {"title": "Get CPU name", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    "t32_reset":            {"title": "Reset target CPU", "readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": True},
+    "t32_system_up":        {"title": "Connect debugger to target", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    "t32_system_down":      {"title": "Disconnect debugger from target", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    "t32_get_practice_state": {"title": "Get PRACTICE state", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    "t32_get_message":      {"title": "Get AREA message", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
 }
 
 TOOLS = [
@@ -615,6 +622,62 @@ TOOLS = [
             "required": []
         }
     },
+    {
+        "name": "t32_ping",
+        "description": (
+            "Ping TRACE32 to check if the connection is alive. "
+            "Returns ok if TRACE32 responds."
+        ),
+        "inputSchema": _inject_core_id(None)
+    },
+    {
+        "name": "t32_get_cpu",
+        "description": (
+            "Get the currently configured CPU name from TRACE32. "
+            "Returns the CPU type string (e.g. 'CortexM4', 'CortexA9')."
+        ),
+        "inputSchema": _inject_core_id(None)
+    },
+    {
+        "name": "t32_reset",
+        "description": (
+            "Reset the target CPU. "
+            "Equivalent to SYStem.RESetTarget PRACTICE command."
+        ),
+        "inputSchema": _inject_core_id(None)
+    },
+    {
+        "name": "t32_system_up",
+        "description": (
+            "Connect the debugger to the target (SYStem.Up). "
+            "Must be called after t32_connect to start debugging."
+        ),
+        "inputSchema": _inject_core_id(None)
+    },
+    {
+        "name": "t32_system_down",
+        "description": (
+            "Disconnect the debugger from the target (SYStem.Down). "
+            "Releases the debug interface but keeps the TRACE32 connection."
+        ),
+        "inputSchema": _inject_core_id(None)
+    },
+    {
+        "name": "t32_get_practice_state",
+        "description": (
+            "Check if a PRACTICE (.cmm) script is currently running. "
+            "Returns running status as boolean."
+        ),
+        "inputSchema": _inject_core_id(None)
+    },
+    {
+        "name": "t32_get_message",
+        "description": (
+            "Get the last message from the TRACE32 AREA window. "
+            "Returns the message text and mode (type of message)."
+        ),
+        "inputSchema": _inject_core_id(None)
+    },
 ]
 
 # Inject annotations into each tool definition
@@ -736,7 +799,7 @@ _RESOURCE_CONTENTS = {
         "3. **Always connect first.** Call `t32_connect` (or `t32_connect_all`) before "
         "using any other tool.\n"
         "\n"
-        "## Available Tools (28)\n"
+        "## Available Tools (36)\n"
         "\n"
         "### Connection\n"
         "- `t32_connect` — Connect to a TRACE32 instance\n"
@@ -752,6 +815,9 @@ _RESOURCE_CONTENTS = {
         "- `t32_break` — Halt execution\n"
         "- `t32_step` — Single step (with step-over option)\n"
         "- `t32_get_state` — Get CPU state\n"
+        "- `t32_reset` — Reset target CPU\n"
+        "- `t32_system_up` — Connect debugger to target (SYStem.Up)\n"
+        "- `t32_system_down` — Disconnect debugger from target (SYStem.Down)\n"
         "\n"
         "### Memory & Registers\n"
         "- `t32_read_memory` / `t32_write_memory` — Memory access\n"
@@ -770,6 +836,10 @@ _RESOURCE_CONTENTS = {
         "- `t32_memory_dump` — Dump memory to file (binary or T32-style text)\n"
         "- `t32_memory_load` — Load file to target memory (binary or T32-style text)\n"
         "- `t32_get_version` — Get TRACE32 version\n"
+        "- `t32_ping` — Check connection is alive\n"
+        "- `t32_get_cpu` — Get configured CPU name\n"
+        "- `t32_get_practice_state` — Check if PRACTICE script is running\n"
+        "- `t32_get_message` — Get last AREA window message\n"
         "\n"
         "## Multi-Core\n"
         "All tools accept `core_id` (0-15, default 0). Each core maps to a separate "
@@ -1277,6 +1347,46 @@ def _handle_start(args):
     return result
 
 
+def _handle_ping(args):
+    client = _get_client(args)
+    client.ping()
+    return {"status": "ok"}
+
+
+def _handle_get_cpu(args):
+    client = _get_client(args)
+    cpu = client.get_cpu()
+    return {"cpu": cpu}
+
+
+def _handle_reset(args):
+    client = _get_client(args)
+    client.reset_target()
+    return {"status": "ok", "action": "target reset"}
+
+
+def _handle_system_up(args):
+    client = _get_client(args)
+    client.system_up()
+    return {"status": "ok", "action": "system up"}
+
+
+def _handle_system_down(args):
+    client = _get_client(args)
+    client.system_down()
+    return {"status": "ok", "action": "system down"}
+
+
+def _handle_get_practice_state(args):
+    client = _get_client(args)
+    return client.get_practice_state()
+
+
+def _handle_get_message(args):
+    client = _get_client(args)
+    return client.get_message()
+
+
 # Tool name -> handler mapping
 _HANDLERS = {
     "t32_connect": _handle_connect,
@@ -1308,6 +1418,13 @@ _HANDLERS = {
     "t32_memory_dump": _handle_memory_dump,
     "t32_memory_load": _handle_memory_load,
     "t32_start": _handle_start,
+    "t32_ping": _handle_ping,
+    "t32_get_cpu": _handle_get_cpu,
+    "t32_reset": _handle_reset,
+    "t32_system_up": _handle_system_up,
+    "t32_system_down": _handle_system_down,
+    "t32_get_practice_state": _handle_get_practice_state,
+    "t32_get_message": _handle_get_message,
 }
 
 # Tools that accept progress_token kwarg

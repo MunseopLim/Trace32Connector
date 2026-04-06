@@ -185,5 +185,69 @@ class TestMcpEval(_MockServerTestBase):
         self.assertIn('0x8002000', r['parsed']['result'])
 
 
+class TestMcpPing(_MockServerTestBase):
+    """Test ping tool through MCP."""
+
+    def test_ping_ok(self):
+        r = _call_tool('t32_ping', {})
+        self.assertFalse(r['is_error'])
+        self.assertEqual(r['parsed']['status'], 'ok')
+
+
+class TestMcpGetCpu(_MockServerTestBase):
+    """Test get_cpu tool through MCP."""
+
+    def test_get_cpu(self):
+        r = _call_tool('t32_get_cpu', {})
+        self.assertFalse(r['is_error'])
+        self.assertIn('cpu', r['parsed'])
+
+
+class TestMcpReset(_MockServerTestBase):
+    """Test reset tool through MCP."""
+
+    def test_reset(self):
+        r = _call_tool('t32_reset', {})
+        self.assertFalse(r['is_error'])
+        self.assertEqual(r['parsed']['status'], 'ok')
+        self.assertEqual(r['parsed']['action'], 'target reset')
+
+
+class TestMcpSystemUpDown(_MockServerTestBase):
+    """Test system_up and system_down tools through MCP."""
+
+    def test_system_up(self):
+        r = _call_tool('t32_system_up', {})
+        self.assertFalse(r['is_error'])
+        self.assertEqual(r['parsed']['status'], 'ok')
+        self.assertEqual(r['parsed']['action'], 'system up')
+
+    def test_system_down(self):
+        r = _call_tool('t32_system_down', {})
+        self.assertFalse(r['is_error'])
+        self.assertEqual(r['parsed']['status'], 'ok')
+        self.assertEqual(r['parsed']['action'], 'system down')
+
+
+class TestMcpGetPracticeState(_MockServerTestBase):
+    """Test get_practice_state tool through MCP."""
+
+    def test_get_practice_state(self):
+        r = _call_tool('t32_get_practice_state', {})
+        self.assertFalse(r['is_error'])
+        self.assertIn('running', r['parsed'])
+        self.assertIsInstance(r['parsed']['running'], bool)
+
+
+class TestMcpGetMessage(_MockServerTestBase):
+    """Test get_message tool through MCP."""
+
+    def test_get_message(self):
+        r = _call_tool('t32_get_message', {})
+        self.assertFalse(r['is_error'])
+        self.assertIn('mode', r['parsed'])
+        self.assertIn('text', r['parsed'])
+
+
 if __name__ == '__main__':
     unittest.main()

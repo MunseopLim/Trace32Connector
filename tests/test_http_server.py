@@ -98,6 +98,22 @@ class TestRouteDefinitions(unittest.TestCase):
         self.assertIn('/api/breakpoint/delete', _POST_ROUTES)
         self.assertIn('/api/breakpoint/list', _GET_ROUTES)
 
+    def test_reset_route_exists(self):
+        self.assertIn('/api/reset', _POST_ROUTES)
+
+    def test_system_routes_exist(self):
+        self.assertIn('/api/system/up', _POST_ROUTES)
+        self.assertIn('/api/system/down', _POST_ROUTES)
+
+    def test_cpu_route_exists(self):
+        self.assertIn('/api/cpu', _GET_ROUTES)
+
+    def test_practice_state_route_exists(self):
+        self.assertIn('/api/practice/state', _GET_ROUTES)
+
+    def test_message_route_exists(self):
+        self.assertIn('/api/message', _GET_ROUTES)
+
 
 class TestHttpServer(unittest.TestCase):
     """Test actual HTTP server responses (without TRACE32 connection)."""

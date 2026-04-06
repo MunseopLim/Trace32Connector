@@ -1129,5 +1129,104 @@ class TestT32Start(unittest.TestCase):
             pass
 
 
+class TestNewToolDefinitions(unittest.TestCase):
+    """Test the 7 new tool definitions are properly registered."""
+
+    def test_ping_tool_exists(self):
+        names = [t["name"] for t in TOOLS]
+        self.assertIn("t32_ping", names)
+
+    def test_get_cpu_tool_exists(self):
+        names = [t["name"] for t in TOOLS]
+        self.assertIn("t32_get_cpu", names)
+
+    def test_reset_tool_exists(self):
+        names = [t["name"] for t in TOOLS]
+        self.assertIn("t32_reset", names)
+
+    def test_system_up_tool_exists(self):
+        names = [t["name"] for t in TOOLS]
+        self.assertIn("t32_system_up", names)
+
+    def test_system_down_tool_exists(self):
+        names = [t["name"] for t in TOOLS]
+        self.assertIn("t32_system_down", names)
+
+    def test_get_practice_state_tool_exists(self):
+        names = [t["name"] for t in TOOLS]
+        self.assertIn("t32_get_practice_state", names)
+
+    def test_get_message_tool_exists(self):
+        names = [t["name"] for t in TOOLS]
+        self.assertIn("t32_get_message", names)
+
+    def test_new_tools_have_handlers(self):
+        new_tools = [
+            "t32_ping", "t32_get_cpu", "t32_reset",
+            "t32_system_up", "t32_system_down",
+            "t32_get_practice_state", "t32_get_message",
+        ]
+        for name in new_tools:
+            self.assertIn(name, _HANDLERS,
+                          "Tool '{0}' has no handler".format(name))
+
+    def test_new_tools_have_annotations(self):
+        new_tools = [
+            "t32_ping", "t32_get_cpu", "t32_reset",
+            "t32_system_up", "t32_system_down",
+            "t32_get_practice_state", "t32_get_message",
+        ]
+        for name in new_tools:
+            self.assertIn(name, _ANNOTATIONS,
+                          "Tool '{0}' has no annotations".format(name))
+
+    def test_new_tools_have_core_id_property(self):
+        new_tools = [
+            "t32_ping", "t32_get_cpu", "t32_reset",
+            "t32_system_up", "t32_system_down",
+            "t32_get_practice_state", "t32_get_message",
+        ]
+        tool_map = {t["name"]: t for t in TOOLS}
+        for name in new_tools:
+            tool = tool_map[name]
+            schema = tool.get("inputSchema", {})
+            props = schema.get("properties", {})
+            self.assertIn("core_id", props,
+                          "Tool '{0}' missing core_id property".format(name))
+
+    def test_ping_annotation_readonly(self):
+        self.assertTrue(_ANNOTATIONS["t32_ping"]["readOnlyHint"])
+
+    def test_reset_annotation_destructive(self):
+        self.assertTrue(_ANNOTATIONS["t32_reset"]["destructiveHint"])
+
+    def test_new_tools_without_connection_return_error(self):
+        """Calling new tools without connection should return error, not crash."""
+        new_tools = [
+            "t32_ping", "t32_get_cpu", "t32_reset",
+            "t32_system_up", "t32_system_down",
+            "t32_get_practice_state", "t32_get_message",
+        ]
+        for name in new_tools:
+            request = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": {}}
+            }
+            response = _handle_request(request)
+            result = response["result"]
+            self.assertTrue(result.get("isError", False),
+                            "Tool '{0}' should error without connection".format(name))
+
+    def test_total_tool_count(self):
+        """Verify the total number of tools after additions."""
+        self.assertEqual(len(TOOLS), 36)
+
+    def test_total_handler_count(self):
+        """Verify handler count matches tool count."""
+        self.assertEqual(len(_HANDLERS), 36)
+
+
 if __name__ == '__main__':
     unittest.main()
